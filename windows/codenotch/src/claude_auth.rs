@@ -48,8 +48,9 @@ const LOGIN_SH: &str = "echo 'Complete sign-in in your browser. Paste any code i
 /// choice wins.
 #[cfg(not(windows))]
 fn terminal_emulator() -> Option<std::path::PathBuf> {
-    const CANDIDATES: [&str; 8] = [
+    const CANDIDATES: [&str; 9] = [
         "x-terminal-emulator",
+        "ptyxis",
         "gnome-terminal",
         "konsole",
         "xfce4-terminal",
@@ -73,8 +74,11 @@ fn terminal_emulator() -> Option<std::path::PathBuf> {
 #[cfg(not(windows))]
 fn login_command(cli: &std::path::Path) -> Result<Command, String> {
     let term = terminal_emulator().ok_or("No terminal emulator found. Run `claude auth login` yourself.")?;
-    let mut cmd = Command::new(term);
-    cmd.args(["-e", "sh", "-c", LOGIN_SH]).env("CODENOTCH_CLAUDE_CLI", cli);
+    let mut cmd = terminal_command(&term);
+    cmd.args(["sh", "-c", LOGIN_SH]).env("CODENOTCH_CLAUDE_CLI", cli);
+    // Let the terminal use the desktop's native backend, independently of our
+    // XWayland widget. Standalone/wait modes keep the auth guard until it exits.
+    cmd.env_remove("GDK_BACKEND");
     cmd.current_dir(dirs::home_dir().ok_or("Home directory unavailable.")?);
     for (key, _) in std::env::vars_os() {
         let k = key.to_string_lossy();
@@ -84,6 +88,20 @@ fn login_command(cli: &std::path::Path) -> Result<Command, String> {
         }
     }
     Ok(cmd)
+}
+
+#[cfg(not(windows))]
+fn terminal_command(term: &std::path::Path) -> Command {
+    let mut cmd = Command::new(term);
+    match term.file_name().and_then(|n| n.to_str()).unwrap_or("") {
+        "ptyxis" => { cmd.args(["--standalone", "--"]); }
+        "gnome-terminal" => { cmd.args(["--wait", "--"]); }
+        "kgx" => { cmd.args(["--wait", "--"]); }
+        "konsole" => { cmd.args(["--separate", "-e"]); }
+        "xfce4-terminal" => { cmd.args(["--disable-server", "-x"]); }
+        _ => { cmd.arg("-e"); }
+    }
+    cmd
 }
 
 #[cfg(windows)]
@@ -154,6 +172,16 @@ pub fn start_login() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(not(windows))]
+    #[test]
+    fn fedora_terminal_owns_the_login_window() {
+        let cmd = terminal_command(std::path::Path::new("/usr/bin/ptyxis"));
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args, ["--standalone", "--"]);
+        let cmd = terminal_command(std::path::Path::new("/usr/bin/gnome-terminal"));
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().to_string()).collect();
+        assert_eq!(args, ["--wait", "--"]);
+    }
     #[test]
     fn gate_excludes_login_and_renewal_and_releases_on_drop() {
         let guard = try_acquire().unwrap();

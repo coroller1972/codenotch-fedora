@@ -88,10 +88,29 @@ pub fn enable() -> Result<String, String> {
     }
     let entry = format!(
         "[Desktop Entry]\nType=Application\nName=Codenotch\nExec=\"{}\" --silent\nTerminal=false\nX-GNOME-Autostart-enabled=true\n",
-        exe.display()
+        desktop_exec_path(&exe)
     );
     std::fs::write(&path, entry).map_err(|e| e.to_string())?;
     Ok("start at sign-in enabled (silent until a session appears)".into())
+}
+
+/// Desktop entries have two escaping layers: the string value, then Exec's
+/// quoted argument. Percent signs must also survive field-code expansion.
+#[cfg(not(windows))]
+fn desktop_exec_path(path: &std::path::Path) -> String {
+    let mut escaped = String::new();
+    for c in path.to_string_lossy().chars() {
+        match c {
+            '\\' => escaped.push_str("\\\\\\\\"),
+            '"' | '`' | '$' => { escaped.push_str("\\\\"); escaped.push(c); }
+            '%' => escaped.push_str("%%"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            '\t' => escaped.push_str("\\t"),
+            _ => escaped.push(c),
+        }
+    }
+    escaped
 }
 
 #[cfg(not(windows))]

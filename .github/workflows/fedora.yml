@@ -1,0 +1,128 @@
+name: Fedora Linux
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fedora-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  fedora:
+    name: Test and build Fedora 44 RPM (x86_64)
+    runs-on: ubuntu-latest
+    container: fedora:44
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Install build and test dependencies
+        run: >-
+          dnf install -y git rust cargo gcc gcc-c++ make pkgconf-pkg-config
+          openssl-devel webkit2gtk4.1-devel gtk3-devel libappindicator-gtk3-devel
+          librsvg2-devel libxdo-devel nodejs python3 python3-gobject python3-cairo desktop-file-utils
+          tar zstd rpm
+          xorg-x11-server-Xvfb xorg-x11-xauth dbus-daemon
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check application and release versions
+        run: |
+          python3 - <<'PY'
+          import json, os, tomllib
+          from pathlib import Path
+          app = Path('windows/codenotch')
+          version = json.loads((app / 'tauri.conf.json').read_text())['version']
+          crate = tomllib.loads((app / 'Cargo.toml').read_text())['package']['version']
+          assert version == crate, f'Tauri version {version} differs from Cargo version {crate}'
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', f'The release tag must be v{version}'
+          print(f'Codenotch {version} — Fedora 44 x86_64')
+          PY
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: windows
+          key: fedora-44
+      - name: Tests
+        run: make test
+      - name: X11 pointer and terminal activation
+        run: xvfb-run -a cargo test --manifest-path windows/Cargo.toml --locked x11_window_activation_and_pointer_query -- --ignored
+      - name: Build
+        run: make build
+      - name: Compiled hooks and autostart
+        run: python3 linux/verify_runtime.py
+      - name: GTK and WebKit hover and click-through (no account access)
+        # Root inside an ephemeral CI container cannot create WebKit's nested
+        # sandbox. This switch is confined to the synthetic smoke test.
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+        run: python3 linux/verify_hover.py
+      - name: WebKit rendered activity and folded pixels
+        env:
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: '1'
+        run: xvfb-run -a dbus-run-session -- python3 linux/verify_render.py
+      - name: Package RPM
+        run: |
+          # A restored target cache may contain a previous version's bundle.
+          rm -f windows/target/release/bundle/rpm/*.rpm
+          make rpm
+      - name: Prepare download and checksum
+        run: |
+          shopt -s nullglob
+          rpms=(windows/target/release/bundle/rpm/*.rpm)
+          if [[ ${#rpms[@]} -ne 1 ]]; then
+            echo 'Expected exactly one RPM' >&2
+            exit 1
+          fi
+          test "$(rpm -qp --qf '%{ARCH}' "${rpms[0]}")" = x86_64
+          rpm -qpl "${rpms[0]}" | grep -Fx /usr/bin/codenotch-hook
+          mkdir -p windows/target/release/download
+          cp "${rpms[0]}" windows/target/release/download/Codenotch-fedora-x86_64.rpm
+          cd windows/target/release/download
+          sha256sum Codenotch-fedora-x86_64.rpm > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: codenotch-fedora-rpm
+          path: |
+            windows/target/release/download/Codenotch-fedora-x86_64.rpm
+            windows/target/release/download/SHA256SUMS
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+  release:
+    name: Publish Fedora RPM
+    needs: fedora
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: codenotch-fedora-rpm
+          path: download
+      - name: Publish the tested package
+        working-directory: download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          sha256sum -c SHA256SUMS
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" Codenotch-fedora-x86_64.rpm SHA256SUMS --clobber
+          else
+            flags=()
+            if [[ "$TAG" == *-* ]]; then flags+=(--prerelease); fi
+            gh release create "$TAG" Codenotch-fedora-x86_64.rpm SHA256SUMS \
+              --verify-tag --title "Codenotch Fedora $TAG" --generate-notes "${flags[@]}"
+          fi

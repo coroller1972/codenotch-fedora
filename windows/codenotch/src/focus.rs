@@ -114,14 +114,19 @@ pub fn focus_terminal(claude_pid: u32) -> bool {
     true
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+pub fn focus_terminal(claude_pid: u32) -> bool {
+    crate::linux::focus_terminal(claude_pid)
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
 pub fn focus_terminal(_claude_pid: u32) -> bool {
     false
 }
 
 // ---------------- Process and foreground helpers shared by seen-clears-it and the desktop jump-back ----------------
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub struct ProcMaps {
     pub ppid: std::collections::HashMap<u32, u32>,
     pub name: std::collections::HashMap<u32, String>, // lower-case exe name
@@ -177,7 +182,7 @@ pub fn fg_pid() -> u32 {
     }
 }
 
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn chain_of(pid: u32, ppid: &std::collections::HashMap<u32, u32>) -> Vec<u32> {
     let mut chain = vec![pid];
     let mut cur = pid;
@@ -194,15 +199,37 @@ pub fn chain_of(pid: u32, ppid: &std::collections::HashMap<u32, u32>) -> Vec<u32
 }
 
 /// Whether the foreground process belongs to a session's terminal window (itself on the chain, or its parent — the conhost case)
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 pub fn pid_hits_chain(pid: u32, chain: &[u32], maps: &ProcMaps) -> bool {
-    chain.contains(&pid)
+    #[cfg(target_os = "linux")]
+    { let _ = maps; pid != 0 && chain.contains(&pid) }
+    #[cfg(windows)]
+    { chain.contains(&pid)
         || maps
             .ppid
             .get(&pid)
             .map(|p| chain.contains(p))
-            .unwrap_or(false)
+            .unwrap_or(false) }
 }
+
+#[cfg(target_os = "linux")]
+pub fn proc_maps() -> ProcMaps {
+    let mut maps = ProcMaps { ppid: Default::default(), name: Default::default() };
+    if let Ok(entries) = std::fs::read_dir("/proc") {
+        for entry in entries.flatten() {
+            let Some(pid) = entry.file_name().to_str().and_then(|s| s.parse::<u32>().ok()) else { continue };
+            if let Some((parent, name)) = std::fs::read_to_string(entry.path().join("stat"))
+                .ok().and_then(|s| crate::linux::parse_stat(&s)) {
+                maps.ppid.insert(pid, parent);
+                maps.name.insert(pid, name);
+            }
+        }
+    }
+    maps
+}
+
+#[cfg(target_os = "linux")]
+pub fn fg_pid() -> u32 { crate::linux::foreground_pid() }
 
 /// Focus the Claude desktop app's main window (the jump-back target for desktop sessions: the largest visible window whose process name contains claude)
 #[cfg(windows)]

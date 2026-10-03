@@ -18,6 +18,11 @@ use std::os::windows::ffi::OsStrExt;
 /// Discover installed official Antigravity CLI (`agy.exe`).
 /// Checks `%LOCALAPPDATA%\agy\bin\agy.exe` and `PATH` only (only `.exe` binaries).
 pub fn find_agy() -> Option<PathBuf> {
+    #[cfg(not(windows))]
+    if let Some(home) = dirs::home_dir() {
+        if let Some(path) = find_agy_in(&[home.join(".local/bin")]) { return Some(path); }
+    }
+    #[cfg(windows)]
     if let Some(local) = dirs::data_local_dir() {
         let candidate = local.join("agy").join("bin").join("agy.exe");
         if candidate.is_file() {
@@ -33,12 +38,20 @@ pub fn find_agy() -> Option<PathBuf> {
 /// Helper for testing discovery in explicit directories without touching environment.
 fn find_agy_in(dirs: &[PathBuf]) -> Option<PathBuf> {
     for dir in dirs {
-        let candidate = dir.join("agy.exe");
-        if candidate.is_file() {
+        let candidate = dir.join(if cfg!(windows) { "agy.exe" } else { "agy" });
+        if executable(&candidate) {
             return Some(candidate);
         }
     }
     None
+}
+
+fn executable(path: &Path) -> bool {
+    #[cfg(unix)]
+    { use std::os::unix::fs::PermissionsExt;
+      path.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) }
+    #[cfg(not(unix))]
+    { path.is_file() }
 }
 
 /// Strips ANSI escape sequences (CSI, OSC, 2-character escapes) and normalizes line endings.
@@ -481,14 +494,56 @@ fn run_cmd_conpty(
     Ok(sanitize_terminal_output(&text))
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
 fn run_cmd_conpty(
-    _program: &Path,
-    _args: &[&str],
-    _cwd: Option<&Path>,
-    _timeout: Duration,
+    program: &Path,
+    args: &[&str],
+    cwd: Option<&Path>,
+    timeout: Duration,
 ) -> Result<String, String> {
-    Err("Antigravity CLI runner requires Windows".into())
+    use std::io::Read;
+    use std::os::unix::process::CommandExt;
+    use std::process::{Command, Stdio};
+    let mut command = Command::new(program);
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null())
+        .process_group(0);
+    if let Some(cwd) = cwd { command.current_dir(cwd); }
+    let mut child = command.spawn().map_err(|e| format!("Cannot start Antigravity CLI: {e}"))?;
+    let group = child.id() as i32;
+    let mut stdout = child.stdout.take().ok_or("No CLI output pipe")?;
+    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let mut chunk = [0; 4096];
+        while let Ok(n) = stdout.read(&mut chunk) {
+            if n == 0 { break; }
+            let keep = n.min((64 * 1024usize).saturating_sub(bytes.len()));
+            bytes.extend_from_slice(&chunk[..keep]);
+        }
+        let _ = tx.send(bytes);
+    });
+    let deadline = std::time::Instant::now() + timeout;
+    let result = loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => break Ok(()),
+            Ok(Some(_)) => break Err("Antigravity CLI exited unsuccessfully".to_string()),
+            Err(e) => break Err(format!("Cannot wait for Antigravity CLI: {e}")),
+            _ if std::time::Instant::now() >= deadline => break Err("Antigravity CLI timed out".to_string()),
+            _ => std::thread::sleep(Duration::from_millis(25)),
+        }
+    };
+    // Only the process group created above; close inherited pipes on timeout
+    // and clean up any CLI descendants even after a successful parent exit.
+    unsafe { libc::kill(-group, libc::SIGKILL); }
+    let _ = child.wait();
+    result?;
+    let bytes = rx.recv_timeout(Duration::from_secs(1)).map_err(|_| "CLI output did not close")?;
+    Ok(sanitize_terminal_output(&String::from_utf8_lossy(&bytes)))
+}
+
+#[cfg(not(any(windows, target_os = "linux")))]
+fn run_cmd_conpty(_: &Path, _: &[&str], _: Option<&Path>, _: Duration) -> Result<String, String> {
+    Err("Antigravity CLI runner is unavailable on this platform".into())
 }
 
 /// Executes official `agy --print /usage` via native ConPTY.
@@ -503,6 +558,20 @@ pub fn read_quota() -> Result<Vec<LimitWindow>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_runner_drains_and_bounds_output_and_times_out() {
+        let shell = Path::new("/bin/sh");
+        let output = run_cmd_conpty(shell, &["-c", "printf '\\033[31mQuota\\033[0m\\n'"], None, Duration::from_secs(2)).unwrap();
+        assert_eq!(output, "Quota\n");
+        let output = run_cmd_conpty(shell, &["-c", "head -c 100000 /dev/zero"], None, Duration::from_secs(2)).unwrap();
+        assert_eq!(output.len(), 65536);
+        assert!(run_cmd_conpty(shell, &["-c", "exit 2"], None, Duration::from_secs(2)).is_err());
+        let start = std::time::Instant::now();
+        assert!(run_cmd_conpty(shell, &["-c", "sleep 30 & wait"], None, Duration::from_millis(75)).unwrap_err().contains("timed out"));
+        assert!(start.elapsed() < Duration::from_secs(2));
+    }
 
     #[test]
     fn quoted_paths_keep_backslashes() {

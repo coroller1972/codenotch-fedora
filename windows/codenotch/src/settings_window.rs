@@ -54,6 +54,7 @@ fn open_now(app: &AppHandle) {
     match builder.build() {
         // A page that never reports ready must not leave the window open but invisible
         Ok(w) => {
+            if let Some(icon) = crate::trayicon::window_mark() { let _ = w.set_icon(icon); }
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(3));
                 if !w.is_visible().unwrap_or(true) {
@@ -80,6 +81,7 @@ fn reveal(w: &tauri::WebviewWindow) {
 
 #[derive(serde::Serialize)]
 pub struct SystemLook {
+    platform: &'static str,
     mica: bool,
     /// The accent palette as #rrggbb: light 3, light 2, light 1, accent, dark 1, dark 2, dark 3.
     accent: Vec<String>,
@@ -88,6 +90,7 @@ pub struct SystemLook {
 #[tauri::command]
 pub fn get_system_look() -> SystemLook {
     SystemLook {
+        platform: std::env::consts::OS,
         mica: has_mica(),
         accent: reg_binary(r"Software\Microsoft\Windows\CurrentVersion\Explorer\Accent", "AccentPalette")
             .map(|bytes| palette(&bytes))
@@ -103,8 +106,16 @@ pub fn quit_app(app: AppHandle) {
 /// The credit line's link, as on the Mac.
 #[tauri::command]
 pub fn open_author_page() {
+    #[cfg(windows)]
     let mut cmd = std::process::Command::new("cmd");
+    #[cfg(windows)]
     cmd.args(["/C", "start", "", "https://x.com/hivinz_"]);
+    #[cfg(not(windows))]
+    let mut cmd = {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg("https://x.com/hivinz_");
+        cmd
+    };
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
