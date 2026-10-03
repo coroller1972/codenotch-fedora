@@ -28,6 +28,12 @@ class XImage(C.Structure):
                 ('red_mask', C.c_ulong), ('green_mask', C.c_ulong), ('blue_mask', C.c_ulong)]
 
 
+class XErrorEvent(C.Structure):
+    _fields_ = [('type', C.c_int), ('display', C.c_void_p), ('resourceid', C.c_ulong),
+                ('serial', C.c_ulong), ('error_code', C.c_ubyte),
+                ('request_code', C.c_ubyte), ('minor_code', C.c_ubyte)]
+
+
 class Display:
     def __init__(self, name):
         x11, ext = C.CDLL('libX11.so.6'), C.CDLL('libXext.so.6')
@@ -45,6 +51,7 @@ class Display:
         self.shapes = bind(ext, 'XShapeGetRectangles', C.POINTER(Rectangle), ptr, ul, si, C.POINTER(si), C.POINTER(si))
         self.warp = bind(x11, 'XWarpPointer', si, ptr, ul, ul, si, si, ui, ui, si, si)
         self.sync = bind(x11, 'XSync', si, ptr, si)
+        self.set_error_handler = bind(x11, 'XSetErrorHandler', ptr, ptr)
         self.get_image = bind(x11, 'XGetImage', C.POINTER(XImage), ptr, ul, si, si, ui, ui, ul, si)
         self.destroy_image = bind(x11, 'XDestroyImage', si, C.POINTER(XImage))
         self.pointer = bind(x11, 'XQueryPointer', si, ptr, ul, C.POINTER(ul), C.POINTER(ul), C.POINTER(si), C.POINTER(si), C.POINTER(si), C.POINTER(si), C.POINTER(ui))
@@ -60,9 +67,32 @@ class Display:
         return result
 
     def bounds(self, window):
+        # GTK creates short-lived startup windows. A child returned by XQueryTree
+        # can disappear before XGetGeometry; Xlib's default handler would exit
+        # the entire test before Python can check the failed request's status.
+        errors = []
+
+        @C.CFUNCTYPE(C.c_int, C.c_void_p, C.POINTER(XErrorEvent))
+        def handle_error(display, event):
+            error = event.contents
+            errors.append((display, error.resourceid, error.error_code, error.request_code))
+            return 0
+
         root, x, y = C.c_ulong(), C.c_int(), C.c_int()
         width, height, border, depth = [C.c_uint() for _ in range(4)]
-        self.geometry(self.handle, window, C.byref(root), C.byref(x), C.byref(y), C.byref(width), C.byref(height), C.byref(border), C.byref(depth))
+        # This harness uses Xlib on one thread. Drain earlier requests and scope
+        # the temporary handler to this query, preserving all other X errors.
+        self.sync(self.handle, 0)
+        previous = self.set_error_handler(C.cast(handle_error, C.c_void_p))
+        try:
+            status = self.geometry(self.handle, window, C.byref(root), C.byref(x), C.byref(y), C.byref(width), C.byref(height), C.byref(border), C.byref(depth))
+            self.sync(self.handle, 0)
+        finally:
+            self.set_error_handler(previous)
+        for error in errors:
+            assert error == (self.handle, window, 9, 14), f'Unexpected X11 geometry error: {error}'
+        if not status or errors:  # BadDrawable (9) from X_GetGeometry (14)
+            return None
         return x.value, y.value, width.value, height.value
 
     def regions(self, window):
@@ -143,9 +173,10 @@ def verify(binary, output_dir=None):
             with open(Path(tmp) / 'startup.log', 'w+') as log:
                 app = subprocess.Popen(['dbus-run-session', '--', str(binary), '--smoke-test'],
                                        env=env, stdout=log, stderr=subprocess.STDOUT)
-                window = until(lambda: next((w for w in display.windows() if display.bounds(w)[2:] == (360, 650)), None),
-                               'The notch window did not appear')
-                x, y, width, height = display.bounds(window)
+                window, (x, y, width, height) = until(
+                    lambda: next(((w, bounds) for w in display.windows()
+                                  if (bounds := display.bounds(w)) and bounds[2:] == (360, 650)), None),
+                    'The notch window did not appear')
 
                 def card_pixels(label):
                     # Read the *native window*, not WebKit.get_snapshot: the
