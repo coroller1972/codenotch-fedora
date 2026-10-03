@@ -30,7 +30,13 @@ mod carry;
 mod watcher;
 mod settings_window;
 mod topmost;
+#[cfg(windows)]
 mod updater;
+#[cfg(not(windows))]
+#[path = "linux_updater.rs"]
+mod updater;
+#[cfg(target_os = "linux")]
+mod linux;
 
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
@@ -438,7 +444,11 @@ fn left_button_down() -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
     unsafe { (GetAsyncKeyState(VK_LBUTTON.0 as i32) as u16 & 0x8000) != 0 }
 }
-#[cfg(not(windows))]
+#[cfg(target_os = "linux")]
+fn left_button_down() -> bool {
+    linux::left_button_down()
+}
+#[cfg(not(any(windows, target_os = "linux")))]
 fn left_button_down() -> bool {
     false
 }
@@ -641,7 +651,15 @@ static HOT: Mutex<Vec<[f64; 4]>> = Mutex::new(Vec::new());
 static EXPANDED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 #[tauri::command]
-fn set_hot(rects: Vec<[f64; 4]>, expanded: bool, probe: Option<[f64; 4]>) {
+fn set_hot(app: AppHandle, rects: Vec<[f64; 4]>, expanded: bool, probe: Option<[f64; 4]>) {
+    #[cfg(target_os = "linux")]
+    if let Some(window) = app.get_webview_window("notch") {
+        if !linux::set_input_regions(&window, &rects) {
+            applog("Could not update the notch's X11 input region");
+        }
+    }
+    #[cfg(not(target_os = "linux"))]
+    let _ = app;
     *HOT.lock().unwrap() = rects;
     backdrop::set_probe(probe);
     EXPANDED.store(expanded, std::sync::atomic::Ordering::Relaxed);
@@ -655,6 +673,7 @@ fn set_hot(rects: Vec<[f64; 4]>, expanded: bool, probe: Option<[f64; 4]>) {
 /// never get the bit. `WS_EX_LAYERED` is what makes the window answer as one surface, so the helper
 /// that sets both is the only route. Clearing it again is safe — the notch is not otherwise layered
 /// (its transparency is DWM composition), so the window returns to the styles it had.
+#[cfg(not(target_os = "linux"))]
 fn set_click_through(app: &AppHandle, on: bool) {
     let Some(w) = app.get_webview_window("notch") else { return };
     let _ = w.set_ignore_cursor_events(on);
@@ -756,6 +775,7 @@ const HOT_PAD: f64 = 10.0;
 
 /// Is the cursor on something the window is there for? `window` is the outer size in physical
 /// pixels, or None when it could not be read.
+#[cfg(any(not(target_os = "linux"), test))]
 fn cursor_in_hot(rects: &[[f64; 4]], lx: f64, ly: f64, window: Option<(f64, f64)>) -> bool {
     if rects.is_empty() {
         return false;
@@ -787,9 +807,11 @@ fn cursor_in_hot(rects: &[[f64; 4]], lx: f64, ly: f64, window: Option<(f64, f64)
 
 /// Was 150 ms, when this only decided whether the card stayed up. It now also gates whether a click
 /// reaches the notch, and at 150 ms a click arriving in the wrong sample went to the window behind.
+#[cfg(not(target_os = "linux"))]
 const WATCHDOG_MS: u64 = 50;
 /// Kept at the original 300 ms rather than falling out of the faster poll, which would make the
 /// card twitchy.
+#[cfg(not(target_os = "linux"))]
 const LEAVE_MS: u64 = 300;
 
 /// WebView2's mouseleave is unreliable inside a NOACTIVATE transparent window — a cursor that
@@ -803,6 +825,7 @@ const LEAVE_MS: u64 = 300;
 /// ordering is load-bearing: the window ignores the cursor while it is click-through, so the page
 /// gets no mousemove out there and cannot see the pointer arriving. This loop does, and hands the
 /// window its input back in time for the page to open the card.
+#[cfg(not(target_os = "linux"))]
 fn start_pointer_watchdog(app: AppHandle) {
     std::thread::spawn(move || {
         let need = (LEAVE_MS / WATCHDOG_MS).max(1) as u8;
@@ -1622,7 +1645,7 @@ fn start_menu_updater(app: AppHandle) {
 }
 
 /// Seen-clears-it: looking at a session acknowledges it (engine behaviour, unchanged)
-#[cfg(windows)]
+#[cfg(any(windows, target_os = "linux"))]
 fn ack_scan(app: &AppHandle) -> bool {
     let need = {
         let st = app.state::<AppState>();
@@ -1649,7 +1672,7 @@ fn ack_scan(app: &AppHandle) -> bool {
         }
     })
 }
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "linux")))]
 fn ack_scan(_app: &AppHandle) -> bool {
     false
 }
@@ -1725,6 +1748,7 @@ fn main() {
     #[cfg(windows)]
     adopt_system_proxy();
     let args: Vec<String> = std::env::args().collect();
+    let smoke_test = args.iter().any(|arg| arg == "--smoke-test");
     if let Some(cmd) = args.get(1) {
         // Attaching on the GUI path too tied the notch to whatever cmd.exe launched it: closing that
         // window sends CTRL_CLOSE_EVENT to every process on the console, and with no handler the
@@ -1746,7 +1770,7 @@ fn main() {
                 let r = match args.get(2).map(|s| s.as_str()) {
                     Some("on") => autostart::enable(),
                     Some("off") => autostart::disable(),
-                    _ => Err("usage: codenotch.exe autostart on|off".into()),
+                    _ => Err("usage: codenotch autostart on|off".into()),
                 };
                 report(r);
                 return;
@@ -1762,7 +1786,30 @@ fn main() {
         }
     }
 
-    let cfg = config::load();
+    // Set before GTK or any worker is initialized, including desktop/autostart
+    // and hook launches which do not pass through the development launcher.
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("DISPLAY").is_none_or(|v| v.is_empty()) {
+            eprintln!("Codenotch needs X11/XWayland (DISPLAY is missing). On Fedora: sudo dnf install xorg-x11-server-Xwayland");
+            std::process::exit(1);
+        }
+        std::env::set_var("GDK_BACKEND", "x11");
+        // Keep WebKit's compositor but transport frames through shared memory:
+        // GBM allocations fail on some XWayland/NVIDIA combinations. Disabling
+        // the DMA-BUF renderer entirely loses static pixels during animations
+        // on WebKitGTK 2.54. An explicit 0 retains hardware buffer transport.
+        if std::env::var_os("WEBKIT_DMABUF_RENDERER_FORCE_SHM").is_none_or(|v| v.is_empty()) {
+            std::env::set_var("WEBKIT_DMABUF_RENDERER_FORCE_SHM", "1");
+        }
+    }
+    let cfg = if smoke_test {
+        config::Config {
+            theme: "light".into(),
+            notch_slots: vec![config::TraySlot { provider: "codex".into() }],
+            ..Default::default()
+        }
+    } else { config::load() };
     let port = cfg.port;
 
     tauri::Builder::default()
@@ -1777,7 +1824,19 @@ fn main() {
             store: Mutex::new(Default::default()),
             cfg: Mutex::new(cfg),
             usage: Mutex::new(usage::load_persisted()),
-            codex: Mutex::new(codex::load_persisted()),
+            codex: Mutex::new(if smoke_test {
+                // Exercise retained text/card pixels and a busy animation
+                // through real IPC, without a provider request or account.
+                usage::UsageSnapshot {
+                    status: "ok".into(),
+                    windows: vec![usage::LimitWindow {
+                        id: "primary".into(), label: "5 hours".into(), used: 0.25,
+                        ..Default::default()
+                    }],
+                    fetched_at: chrono::Utc::now().timestamp_millis() as u64,
+                    ..Default::default()
+                }
+            } else { codex::load_persisted() }),
             cursor: Mutex::new(cursor::load_persisted()),
             grok: Mutex::new(grok::load_persisted()),
             copilot: Mutex::new(copilot::load_persisted()),
@@ -1785,7 +1844,12 @@ fn main() {
             glm: Mutex::new(glm::load_persisted()),
             opencode: Mutex::new(opencode::load_persisted()),
             glyphs: Mutex::new(Default::default()),
-            activity: Mutex::new(Vec::new()),
+            activity: Mutex::new(if smoke_test {
+                vec![activity::Activity {
+                    provider: "codex".into(), state: "busy".into(),
+                    name: "Synthetic task".into(), detail: "Working".into(), since: 0,
+                }]
+            } else { Vec::new() }),
         })
         .invoke_handler(tauri::generate_handler![
             get_state,
@@ -1871,10 +1935,28 @@ fn main() {
             // after paints the wrong one for a frame, which is a black flash under a light choice
             apply_theme(&handle);
             if let Some(w) = handle.get_webview_window("notch") {
+                #[cfg(target_os = "linux")]
+                {
+                    linux::set_input_regions(&w, &[]);
+                    let _ = w.set_title("Codenotch");
+                }
+                if let Some(icon) = trayicon::window_mark() { let _ = w.set_icon(icon); }
                 let _ = w.show();
             }
             tray::setup(&handle)?;
             notchmenu::setup(&handle);
+            // Exercise GTK/WebKit, IPC and both windows without starting quota
+            // requests, CLI renewal, transcript watchers or the hook server.
+            if smoke_test {
+                settings_window::open(&handle);
+                #[cfg(not(target_os = "linux"))]
+                start_pointer_watchdog(handle.clone());
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_secs(8));
+                    handle.exit(0);
+                });
+                return Ok(());
+            }
             start_menu_updater(handle.clone());
             updater::check_on_launch(&handle);
             // Honours the saved switches: a notch hidden last time stays hidden.
@@ -1893,6 +1975,7 @@ fn main() {
             // Collecting glyphs may read icon resources out of a few executables; do it off the main thread and push when done
             let gh = handle.clone();
             std::thread::spawn(move || reload_glyphs(&gh));
+            #[cfg(not(target_os = "linux"))]
             start_pointer_watchdog(handle.clone());
             backdrop::start(handle.clone());
             start_work_area_watch(handle.clone());

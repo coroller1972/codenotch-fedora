@@ -1,5 +1,10 @@
 # Codenotch for Windows
 
+> This directory also contains the Rust/Tauri application used by the Fedora
+> fork. For Linux downloads and builds, see the [main README](../README.md) and
+> [Fedora guide](../linux/README.md). The Windows documentation below is inherited
+> from the upstream project; this fork publishes RPMs.
+
 A Windows port of [Codenotch](https://github.com/vinzdg/codenotch) — the usage notch that
 sits on the edge of your screen and answers two questions at a glance:
 **how much of my AI allowance is left**, and **is Claude still working**.
@@ -151,45 +156,23 @@ npx @tauri-apps/cli@2 build --config tauri.bundle.conf.json
 # → ..\target\release\bundle\nsis\Codenotch_<version>_x64-setup.exe
 ```
 
-### Linux
+### Fedora Linux
 
-The same crate builds and runs on Linux; the Win32 pieces already sat behind `cfg(windows)`,
-and the rest of the port is portable Rust. Prerequisites on a Debian or Ubuntu machine:
+The Rust application is shared with the Fedora port. From the repository root,
+run `make deps`, `make build` and `make run`; `make install` adds a user installation
+and desktop entry, and `make rpm` creates a Fedora package including the hook helper.
+See the [Fedora guide](../linux/README.md) for installation, tests and limitations.
 
-```sh
-sudo apt install build-essential pkg-config libssl-dev libwebkit2gtk-4.1-dev \
-                 libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
-cargo build --release -p codenotch
-./scripts/run-linux.sh          # pill appears on the right edge
-./scripts/run-linux.sh doctor   # self-diagnosis, same as on Windows
-```
+Linux now uses XWayland from every launch path, supports pointer dragging, reads
+hook configuration from XDG directories, and discovers Linux provider executables.
+Terminal activation is supported for X11 windows; native Wayland windows remain
+under compositor control. Adaptive screen sampling is unavailable on Linux.
+The Linux build never advertises or downloads Windows updates.
 
-`scripts/run-linux.sh` exists because of two things the desktop does not do by itself.
-**Wayland does not let a client place its own windows**, and the notch has to sit on a
-screen edge, so it runs as an X11 client under XWayland. And a shell started from a
-**snap** — Ubuntu's VS Code, for one — exports that snap's library paths, which make a
-binary built against the system glibc die with
-`symbol lookup error: … undefined symbol: __libc_pthread_init`. The script unsets those
-and sets `GDK_BACKEND=x11`; launched from the desktop rather than such a shell, the
-binary runs on its own.
-
-The tray needs GNOME's *AppIndicator Support* extension, as every Tauri tray does there.
-The data folder follows the XDG directories (`~/.config/codenotch`), and providers are
-found at their Linux paths: `~/.claude`, `~/.codex`, `~/.grok`,
-`~/.config/Cursor/User/globalStorage/state.vscdb`.
-
-What does not work yet, and degrades quietly rather than misbehaving:
-
-| Feature | Why |
-|---|---|
-| Dragging the pill along its edge | Follows the mouse through `GetAsyncKeyState`; needs an X11 pointer query. |
-| Seen-clears-it, and jumping back to the terminal | `focus.rs` reads the foreground window and the process tree through Toolhelp; `/proc` plus a window-manager call would replace it. |
-| Antigravity | Its credential is read from the Windows Credential Manager; libsecret is the equivalent. |
-| App icons taken from an installed `.exe` | The built-in provider SVGs cover every provider, so little is lost. |
-
-Everything else — all providers, the hover card, the settings window, the tray menu, hooks,
-start at sign-in (an XDG autostart entry rather than a registry value) — behaves as it does
-on Windows.
+On Debian/Ubuntu, the equivalent build dependencies are `build-essential`,
+`pkg-config`, `libssl-dev`, `libwebkit2gtk-4.1-dev`, `libgtk-3-dev`,
+`libayatana-appindicator3-dev`, `librsvg2-dev`, and `libxdo-dev`. Fedora is the
+reference distribution for this port.
 
 Tray menu: the readings themselves — a line per provider with its headline figure, and under it
 one line per limit window — then **Refresh all**, **Settings…** and **Quit Codenotch**. Clicking a

@@ -34,6 +34,14 @@ fn age_secs(t: SystemTime) -> u64 {
 pub fn run() -> String {
     let mut o = String::new();
     o += &format!("== Codenotch doctor v{} ==\n", env!("CARGO_PKG_VERSION"));
+    #[cfg(target_os = "linux")]
+    {
+        o += &format!("desktop: session={} display={} (the widget uses X11/XWayland)\n",
+            std::env::var("XDG_SESSION_TYPE").unwrap_or_else(|_| "unknown".into()),
+            std::env::var("DISPLAY").unwrap_or_else(|_| "missing — install/enable XWayland".into()));
+        o += "GNOME tray: enable the AppIndicator extension to see the tray icon.\n";
+        o += "Wayland: terminal activation/seen detection is available for X11 windows only.\n";
+    }
 
     let cfg = crate::config::load();
     o += &format!(

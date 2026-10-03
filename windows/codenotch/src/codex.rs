@@ -520,6 +520,7 @@ pub fn snapshot_from_rollout(text: &str) -> Option<(Vec<LimitWindow>, Option<u64
 
 /// Prefer the installed native Codex client: it understands the desktop's managed sign-in.
 /// Only initialize + account/rateLimits/read are sent; no login or inference commands.
+#[cfg(windows)]
 fn native_codex() -> Option<PathBuf> {
     if let Some(local) = dirs::data_local_dir() {
         let mut bins = list_dirs(&local.join("OpenAI/Codex/bin"));
@@ -529,6 +530,46 @@ fn native_codex() -> Option<PathBuf> {
         }
     }
     find_executable().filter(|p| p.extension().and_then(|x| x.to_str()) == Some("exe"))
+}
+
+#[cfg(not(windows))]
+fn native_codex() -> Option<PathBuf> {
+    let mut candidates = Vec::new();
+    if let Some(home) = codex_home() { candidates.push(home.join("bin/codex")); }
+    if let Some(home) = dirs::home_dir() { candidates.push(home.join(".local/bin/codex")); }
+    if let Some(path) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path).filter(|p| p.is_absolute()).map(|p| p.join("codex")));
+    }
+    for candidate in candidates {
+        if is_native_linux(&candidate) { return Some(candidate); }
+        // npm's symlink resolves to @openai/codex/bin/codex.js. Read the
+        // installed native package next to it without executing the JS wrapper.
+        let Some(package) = std::fs::canonicalize(&candidate).ok()
+            .and_then(|p| p.parent()?.parent().map(Path::to_path_buf)) else { continue };
+        let mut packages = vec![package.clone()];
+        for parent in [package.join("node_modules/@openai"), package.parent().unwrap_or(&package).to_path_buf()] {
+            packages.extend(list_dirs(&parent).into_iter().filter(|p|
+                p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("codex-linux-"))));
+        }
+        for package in packages {
+            for triple in list_dirs(&package.join("vendor")) {
+                let native = triple.join("codex/codex");
+                if is_native_linux(&native) { return Some(native); }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(not(windows))]
+fn is_native_linux(path: &Path) -> bool {
+    use std::io::Read;
+    use std::os::unix::fs::PermissionsExt;
+    if !std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0) {
+        return false;
+    }
+    let mut magic = [0; 4];
+    std::fs::File::open(path).and_then(|mut f| f.read_exact(&mut magic)).is_ok() && magic == *b"\x7fELF"
 }
 
 fn app_server_snapshot(result: &serde_json::Value) -> Option<UsageSnapshot> {

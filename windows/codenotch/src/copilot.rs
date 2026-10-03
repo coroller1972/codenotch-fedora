@@ -95,7 +95,7 @@ fn config_dirs() -> Vec<PathBuf> {
         v.push(PathBuf::from(d).join("gh"));
     }
     if let Some(d) = dirs::config_dir() {
-        v.push(d.join("GitHub CLI"));
+        v.push(d.join(if cfg!(windows) { "GitHub CLI" } else { "gh" }));
     }
     if let Some(h) = dirs::home_dir() {
         v.push(h.join(".config").join("gh"));
@@ -127,7 +127,7 @@ pub fn find_executable() -> Option<PathBuf> {
     }
     if let Some(path) = std::env::var_os("PATH") {
         for dir in std::env::split_paths(&path) {
-            cands.push(dir.join("gh.exe"));
+            cands.push(dir.join(if cfg!(windows) { "gh.exe" } else { "gh" }));
         }
     }
     cands.into_iter().find(|p| p.is_file())

@@ -33,26 +33,21 @@ fn main() {
     // Give up quietly — never affect Claude Code
 }
 
-/// Pulls "port": N out of %APPDATA%\codenotch\config.json (hand-rolled scan, no dependency)
+/// Share the app's XDG/APPDATA location and accept only a valid top-level port.
 fn read_port() -> u16 {
-    let path = match std::env::var("APPDATA") {
-        Ok(a) => format!("{a}\\codenotch\\config.json"),
-        Err(_) => return DEFAULT_PORT,
-    };
+    let Some(path) = dirs::config_dir().map(|p| p.join("codenotch/config.json")) else { return DEFAULT_PORT };
     let Ok(txt) = std::fs::read_to_string(path) else {
         return DEFAULT_PORT;
     };
-    if let Some(i) = txt.find("\"port\"") {
-        let digits: String = txt[i + 6..]
-            .chars()
-            .skip_while(|c| !c.is_ascii_digit())
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        if let Ok(p) = digits.parse() {
-            return p;
-        }
-    }
-    DEFAULT_PORT
+    parse_port(&txt)
+}
+
+fn parse_port(txt: &str) -> u16 {
+    serde_json::from_str::<serde_json::Value>(txt).ok()
+        .and_then(|v| v.get("port")?.as_u64())
+        .and_then(|p| u16::try_from(p).ok())
+        .filter(|p| *p != 0)
+        .unwrap_or(DEFAULT_PORT)
 }
 
 fn send(port: u16, event: &str, ppid: u32, body: &str) -> std::io::Result<()> {
@@ -77,7 +72,7 @@ fn send(port: u16, event: &str, ppid: u32, body: &str) -> std::io::Result<()> {
 fn spawn_main() {
     let Ok(me) = std::env::current_exe() else { return };
     let Some(dir) = me.parent() else { return };
-    let exe = dir.join("codenotch.exe");
+    let exe = dir.join(format!("codenotch{}", std::env::consts::EXE_SUFFIX));
     if !exe.exists() {
         return;
     }
@@ -85,6 +80,11 @@ fn spawn_main() {
     cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        cmd.process_group(0);
+    }
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
@@ -137,4 +137,19 @@ fn parent_pid() -> u32 {
 #[cfg(not(windows))]
 fn parent_pid() -> u32 {
     std::os::unix::process::parent_id()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn custom_port_and_invalid_configs() {
+        assert_eq!(parse_port(r#"{"port":51234}"#), 51234);
+        for txt in ["", "null", r#"{"port":null,"scale":123}"#,
+            r#"{"port":0}"#, r#"{"port":65536}"#, r#"{"port":-123}"#,
+            r#"{"port":"123"}"#, r#"{"nested":{"port":123}}"#] {
+            assert_eq!(parse_port(txt), DEFAULT_PORT, "{txt}");
+        }
+    }
 }

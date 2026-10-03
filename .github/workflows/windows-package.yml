@@ -22,9 +22,8 @@ on:
 
 jobs:
   package:
-    # workflow_dispatch is let through so a fork can try the installer before
-    # opening a pull request; every other trigger only runs here.
-    if: github.repository == 'vinzdg/codenotch' || github.event_name == 'workflow_dispatch'
+    # This Fedora fork publishes RPMs through fedora.yml, including manual runs.
+    if: github.repository == 'vinzdg/codenotch'
     name: NSIS installer
     # Only the release step writes anything; `gh release upload` fails without it.
     permissions:

@@ -33,11 +33,12 @@ fn is_ours(entry: &Value) -> bool {
         .unwrap_or(false)
 }
 
-fn load(path: &PathBuf) -> Value {
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|t| serde_json::from_str(&t).ok())
-        .unwrap_or_else(|| json!({}))
+fn load(path: &PathBuf) -> Result<Value, String> {
+    match std::fs::read_to_string(path) {
+        Ok(t) => serde_json::from_str(&t).map_err(|e| format!("Invalid {}: {e}", path.display())),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(json!({})),
+        Err(e) => Err(e.to_string()),
+    }
 }
 
 fn backup_and_write(path: &PathBuf, root: &Value) -> Result<(), String> {
@@ -49,7 +50,8 @@ fn backup_and_write(path: &PathBuf, root: &Value) -> Result<(), String> {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        let _ = std::fs::copy(path, path.with_extension(format!("json.codenotch-bak-{ts}")));
+        std::fs::copy(path, path.with_extension(format!("json.codenotch-bak-{ts}")))
+            .map_err(|e| format!("Could not back up settings: {e}"))?;
     }
     let txt = serde_json::to_string_pretty(root).map_err(|e| e.to_string())?;
     std::fs::write(path, txt).map_err(|e| e.to_string())
@@ -68,14 +70,14 @@ pub fn install() -> Result<String, String> {
         .map_err(|e| e.to_string())?
         .parent()
         .ok_or("cannot locate the program directory")?
-        .join("codenotch-hook.exe");
+        .join(format!("codenotch-hook{}", std::env::consts::EXE_SUFFIX));
     if !hook_exe.exists() {
         return Err(format!("missing {}", hook_exe.display()));
     }
 
-    let mut root = load(&path);
+    let mut root = load(&path)?;
     if !root.is_object() {
-        root = json!({});
+        return Err("settings.json must contain an object".into());
     }
     if !root["hooks"].is_object() {
         root["hooks"] = json!({});
@@ -85,7 +87,7 @@ pub fn install() -> Result<String, String> {
         let arr = root["hooks"][*event].as_array().cloned().unwrap_or_default();
         // Remove our own older entries first
         let mut arr: Vec<Value> = arr.into_iter().filter(|e| !is_ours(e)).collect();
-        let cmd = format!("\"{}\" {}", hook_exe.display(), internal);
+        let cmd = hook_command(&hook_exe, internal);
         let mut entry = json!({
             "hooks": [{ "type": "command", "command": cmd, "timeout": 5 }]
         });
@@ -105,7 +107,7 @@ pub fn uninstall() -> Result<String, String> {
     if !path.exists() {
         return Ok("settings.json does not exist, nothing to uninstall".into());
     }
-    let mut root = load(&path);
+    let mut root = load(&path)?;
     let Some(hooks) = root["hooks"].as_object_mut() else {
         return Ok("no hooks configuration found".into());
     };
@@ -119,4 +121,24 @@ pub fn uninstall() -> Result<String, String> {
     }
     backup_and_write(&path, &root)?;
     Ok(format!("removed {removed} Codenotch hook(s)"))
+}
+
+fn hook_command(path: &std::path::Path, event: &str) -> String {
+    #[cfg(windows)]
+    { format!("\"{}\" {}", path.display(), event) }
+    #[cfg(not(windows))]
+    { format!("'{}' {}", path.to_string_lossy().replace('\'', "'\\''"), event) }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    #[test]
+    fn shell_quote_preserves_special_paths() {
+        let path = std::path::Path::new("/tmp/O'Brien/$HOME/`literal`/codenotch-hook");
+        let cmd = super::hook_command(path, "done");
+        let out = std::process::Command::new("sh")
+            .args(["-c", &format!("printf '%s\\n' {cmd}")]).output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8(out.stdout).unwrap(), format!("{}\ndone\n", path.display()));
+    }
 }

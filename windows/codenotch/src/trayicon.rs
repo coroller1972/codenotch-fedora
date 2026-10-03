@@ -17,6 +17,11 @@ pub fn app_mark() -> Option<tauri::image::Image<'static>> {
     tauri::image::Image::from_bytes(include_bytes!("../icons/tray-color.png")).ok()
 }
 
+/// Window switchers need a larger icon than the notification-area mark.
+pub fn window_mark() -> Option<tauri::image::Image<'static>> {
+    tauri::image::Image::from_bytes(include_bytes!("../icons/128x128.png")).ok()
+}
+
 /// The same icon as a `data:` URL, so the settings window shows what the taskbar shows.
 pub fn app_mark_data_url() -> Option<String> {
     png_data_url(include_bytes!("../icons/tray-color.png"))

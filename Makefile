@@ -1,3 +1,7 @@
+ifeq ($(shell uname -s),Linux)
+include $(dir $(lastword $(MAKEFILE_LIST)))linux/Makefile
+else
+
 # Only if the caller hasn't already chosen a toolchain (`$DEVELOPER_DIR`, or
 # `sudo xcode-select -s`) and the standard path actually exists — exporting a
 # path that isn't there breaks every target with `xcrun: missing DEVELOPER_DIR`
@@ -376,3 +380,5 @@ dmg-ci: build-ci
 	done
 	rm -rf $(CI_DIR)/stage
 	@echo "Unsigned disk image: $(CI_DMG)"
+
+endif # Linux / macOS

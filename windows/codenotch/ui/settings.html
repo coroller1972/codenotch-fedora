@@ -160,8 +160,8 @@
         <div class="group">
           <div class="item"><span>Show</span><span class="seg" id="seg-show"><button data-v="show">Always show</button><button data-v="hover">Show on hover</button><button data-v="hide">Hide</button></span></div>
           <div class="item cap" id="cap-show" data-dynamic></div>
-          <div class="item"><span>Adaptive pill</span><button class="switch" id="sw-adaptive" role="switch" aria-checked="false" aria-label="Adaptive pill"></button></div>
-          <div class="item cap">While the notch is folded, its pill follows what is behind it: light over a dark background, black over a light one, so it stays easy to find. To tell, Codenotch reads a thin strip of the screen beside the pill twice a second and keeps only its average brightness.</div>
+          <div class="item" id="row-adaptive"><span>Adaptive pill</span><button class="switch" id="sw-adaptive" role="switch" aria-checked="false" aria-label="Adaptive pill"></button></div>
+          <div class="item cap" id="cap-adaptive">While the notch is folded, its pill follows what is behind it: light over a dark background, black over a light one, so it stays easy to find. To tell, Codenotch reads a thin strip of the screen beside the pill twice a second and keeps only its average brightness.</div>
           <div class="item"><span>Size</span><span class="seg" id="seg-size"><button data-v="0.8">Small</button><button data-v="1">Medium</button><button data-v="1.25">Large</button></span></div>
           <div class="item cap" id="cap-size" data-dynamic></div>
           <div class="item"><span>Theme</span><span class="seg" id="seg-theme"><button data-v="system">System</button><button data-v="light">Light</button><button data-v="dark">Dark</button></span></div>
@@ -204,7 +204,7 @@
               <option value="uk">Українська</option>
             </select>
           </div>
-          <div class="item cap">Sets the language used by Codenotch. “Follow system” uses the language Windows itself is set to.</div>
+          <div class="item cap" id="cap-language">Sets the language used by Codenotch. “Follow system” uses the language Windows itself is set to.</div>
         </div>
       </section>
 
@@ -214,7 +214,7 @@
           <div class="item cap">Codenotch opens by itself every time you sign in to this computer, and waits quietly in the background until a coding session starts. Turn it off and you have to open Codenotch yourself.</div>
           <div class="item"><span>Version</span><span class="value" id="about-version" data-dynamic>0.3.0</span></div>
           <div class="item"><span>Updates</span><span class="value" id="update-status" data-dynamic></span><button class="btn" id="btn-update" data-dynamic>Check for updates</button></div>
-          <div class="item cap">Codenotch checks for new Windows releases shortly after it starts. Signed updates install here; otherwise download and run the official installer from GitHub.</div>
+          <div class="item cap" id="cap-updates">Codenotch checks for new Windows releases shortly after it starts. Signed updates install here; otherwise download and run the official installer from GitHub.</div>
         </div>
         <div class="group">
           <div class="item"><span>Data folder</span><button class="btn" id="btn-data">Open folder</button></div>
@@ -994,6 +994,7 @@ const STATUS_TEXT = {
   uk:{ ok:'', stale:'останній показник застарів', needsAuth:'не виконано вхід', absent:'не встановлено', none:'немає даних', error:'недоступний' }
 };
 let uiLang = 'en';
+let platform = 'windows';
 function ui(key, fallback){ const table = STATIC_TEXT[uiLang]; return (table && table[key]) || fallback; }
 /* Text the scripts draw is skipped here: renderers set it through ui() themselves. */
 function applyStaticUi(){
@@ -1083,6 +1084,20 @@ function loadLook(){
     if(!look) return;
     document.body.classList.toggle('solid', !look.mica);
     if(Array.isArray(look.accent) && look.accent.length >= 5) palette = look.accent;
+    if(look.platform) platform = look.platform;
+    if(platform === 'linux'){
+      document.getElementById('row-adaptive').hidden = true;
+      document.getElementById('cap-adaptive').hidden = true;
+      for(const [id, text] of [
+        ['cap-language', 'Sets the language used by Codenotch. Follow system uses your desktop language.'],
+        ['cap-updates', 'Update using your Linux package, or rebuild and reinstall from source.']
+      ]){
+        const el = document.getElementById(id);
+        el.dataset.dynamic = '';
+        el.textContent = text;
+      }
+      renderTheme();
+    }
     applyAccent();
   });
 }
@@ -1482,7 +1497,7 @@ function renderTheme(){
     b.setAttribute('aria-pressed', on ? 'true' : 'false');
     b.disabled = themeBusy;
   }
-  const why = THEME_WHY[theme] || '';
+  const why = platform === 'linux' ? ({system:'The notch and this window follow your desktop theme.', light:'A light notch and card.', dark:'A dark notch and card.'}[theme] || '') : (THEME_WHY[theme] || '');
   document.getElementById('cap-theme').textContent = ui(why, why);
 }
 document.getElementById('seg-theme').addEventListener('click', e => {
@@ -1668,8 +1683,9 @@ let updState = null;
 let updateEventSeen = false;
 function renderUpdate(st){
   st = updState = st || {};
-  const busy = !!(st.checking || st.installing);
+  const busy = !!(st.managed || st.checking || st.installing);
   updBtn.disabled = busy;
+  if(st.managed){ updStatus.textContent = st.message || 'Update through your Linux installation'; updBtn.textContent = 'Managed locally'; return; }
   if(st.installing){ updStatus.textContent = ui('Installing…', 'Installing…'); updBtn.textContent = ui('Update', 'Update'); return; }
   if(st.checking){ updStatus.textContent = ui('Checking…', 'Checking…'); updBtn.textContent = ui('Check for updates', 'Check for updates'); return; }
   if(st.available){
@@ -1683,6 +1699,7 @@ function renderUpdate(st){
 }
 updBtn.addEventListener('click', () => {
   const st = updState || {};
+  if(st.managed) return;
   const cmd = st.available ? (st.can_install ? 'install_update' : 'open_update_installer') : 'check_for_update';
   invoke(cmd)
     .catch(e => strip('update failed: ' + errText(e)));

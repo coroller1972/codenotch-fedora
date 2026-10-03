@@ -221,7 +221,7 @@
   /* The rings leave by fading and sliding a little toward the edge, one after another — the Mac's
      NotchMotion.stagger, 28 of its design px (10 here), and no scaling: the clip does the concealing */
   .cell{transition:opacity .18s ease calc(var(--i,0) * 28ms),translate .3s cubic-bezier(.32,.72,.24,1) calc(var(--i,0) * 28ms)}
-  body.folded .cell{opacity:0;translate:10px 0}
+  body.folded .cell{opacity:0;translate:10px 0;visibility:hidden}
   body.folded[data-edge="left"] .cell{translate:-10px 0}
   body.folded[data-edge="top"] .cell{translate:0 -10px}
   body.folded[data-edge="bottom"] .cell{translate:0 10px}
@@ -1212,7 +1212,7 @@ function renderRing(){
   }
   for(const p of ps){
     const cell=pill.querySelector(`.cell[data-p="${p.id}"]`); if(!cell) continue;
-    const svg=cell.querySelector('svg.ring'), reading=cell.querySelector('svg.reading'), activity=cell.querySelector('svg.activity'), pct=cell.querySelector('.pct'), glyph=cell.querySelector('.glyph'), wrap=cell.querySelector('.ringwrap');
+    const svg=cell.querySelector('svg.ring'), reading=cell.querySelector('svg.reading'), pct=cell.querySelector('.pct'), glyph=cell.querySelector('.glyph'), wrap=cell.querySelector('.ringwrap');
     const h=headlineOf(p.snap,p.base);
     let inner=`<circle cx="28" cy="28" r="22" fill="${HOLE}"/><circle cx="28" cy="28" r="25" fill="none" stroke="${TRACK}" stroke-width="5"/>`;
     wrap.classList.toggle('pressed',!!refreshing[p.id]);
@@ -1233,13 +1233,6 @@ function renderRing(){
       }
     }
     svg.innerHTML=inner;
-    { // thin inner arc: spinning white = working, yellow pulse = waiting on you (one animation for all four, different sources)
-      // Its own layer, so a stale reading can dim around it without dimming it: see `.ringwrap.stale`
-      const ws=workState(p.base);
-      if(ws==='running') activity.innerHTML=`<g class="arc-spin">${svgArc(19,0.28,INK,2.5)}</g>`;
-      else if(ws==='attention') activity.innerHTML=`<g class="arc-pulse"><circle cx="28" cy="28" r="19" fill="none" stroke="${WATCH}" stroke-width="2.5"/></g>`;
-      else activity.innerHTML='';
-    }
     if(p.snap.status==='needsAuth'||p.snap.status==='none') pct.textContent='—';
     else if(h && h.count!=null) pct.textContent='~'+h.count;
     else if(h) pct.textContent=(h.derived?'~':'')+pctText(h.used)+'%';
@@ -1247,7 +1240,25 @@ function renderRing(){
     glyph.classList.toggle('dim', !!(h && h.used>=1));
     wrap.classList.toggle('stale', staleOf(p.snap));
   }
+  renderActivities();
   reportHot(); // a provider appearing or leaving resizes the pill
+}
+
+// Remove hidden animated SVG layers instead of relying on a parent's opacity
+// or clip-path. WebKitGTK may keep compositing them over a folded notch.
+function renderActivities(){
+  for(const p of providers()){
+    const layer=pill.querySelector(`.cell[data-p="${p.id}"] svg.activity`);
+    if(!layer) continue;
+    const state=folded?'idle':workState(p.base);
+    const ink=state==='running'?INK:WATCH;
+    const key=state+':'+ink;
+    if(layer.dataset.drawn===key) continue; // quota updates must not restart the animation
+    layer.dataset.drawn=key;
+    if(state==='running') layer.innerHTML=`<g class="arc-spin">${svgArc(19,0.28,INK,2.5)}</g>`;
+    else if(state==='attention') layer.innerHTML=`<g class="arc-pulse"><circle cx="28" cy="28" r="19" fill="none" stroke="${WATCH}" stroke-width="2.5"/></g>`;
+    else layer.replaceChildren();
+  }
 }
 
 function resetCopy(ms){
@@ -1531,6 +1542,8 @@ function pointerInHot(x,y){
 }
 let hideLogged=0;
 document.addEventListener('mousemove',e=>{
+  // Linux gets enter/leave directly from X11. DOM events from animated WebKit
+  // layers can arrive late, so they must not overwrite that pointer state.
   // Folded, the page is sent events only over the pill, so any movement at all is the pointer reaching it
   if(folded){ pointerIn=true; unfold(); }
   if(dragging)return; // no card while dragging
@@ -2045,6 +2058,7 @@ function setFolded(f){
   folded=f;
   if(f){ clearTimeout(hideTimer); hideCard(); arcIn(true); setHovered(null); } else arcOut();
   document.body.classList.toggle('folded',f);
+  renderActivities();
   reportHot();
 }
 function unfold(){ clearTimeout(foldTimer); clearTimeout(tuckTimer); setFolded(false); arcOut(); }
