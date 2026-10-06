@@ -25,6 +25,7 @@ mod agy_cli;
 mod glyphs;
 mod trayicon;
 mod activity;
+mod activity_window;
 mod costs;
 mod diag;
 mod carry;
@@ -1916,6 +1917,8 @@ fn main() {
             get_show_usage_pace,
             set_show_usage_pace,
             costs::get_costs,
+            costs::activity::get_activity_timeline,
+            activity_window::open_activity,
             costs::get_cost_settings,
             costs::set_cost_billing,
             costs::set_cost_price,

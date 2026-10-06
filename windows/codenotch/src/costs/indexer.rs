@@ -40,7 +40,9 @@ pub struct Indexer {
 
 /// Lines that cannot be the ones we read are skipped before any JSON is parsed
 const CLAUDE_MARKER: &str = "\"assistant\"";
-const CODEX_MARKERS: [&str; 3] = ["token_count", "session_meta", "turn_context"];
+const CODEX_MARKERS: [&str; 4] = ["token_count", "session_meta", "turn_context", "thread_settings_applied"];
+/// Bumped when Codex rows read before need reading again: 2 = models read from the current shape
+const CODEX_READ_VERSION: &str = "2";
 
 impl Indexer {
     pub fn new(root: PathBuf, format: Format) -> Indexer {
@@ -54,6 +56,11 @@ impl Indexer {
     /// One pass over every transcript, newest first so the current period is right before the
     /// backfill ends. Returns how many turns were written
     pub fn scan(&mut self, store: &mut Store) -> usize {
+        // Rows read by an older reader are read again; the same keys update them in place
+        if self.format == Format::Codex && store.meta("codex_read").as_deref() != Some(CODEX_READ_VERSION) {
+            store.forget_files();
+            store.set_meta("codex_read", CODEX_READ_VERSION);
+        }
         let mut files: Vec<(PathBuf, std::time::SystemTime)> = Vec::new();
         collect(&self.root, &mut files, 0);
         files.sort_by(|a, b| b.1.cmp(&a.1));
@@ -199,11 +206,22 @@ impl Indexer {
                 ctx.cwd = c.to_string();
             }
         }
-        if payload.get("type").and_then(|x| x.as_str()) == Some("turn_context") {
-            if let Some(c) = payload.get("cwd").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+        // The turn's settings: `{"type":"turn_context","payload":{cwd, model}}` today, the type inside
+        // the payload in older rollouts, and `thread_settings_applied` carries them as well
+        let settings = if v.get("type").and_then(|x| x.as_str()) == Some("turn_context")
+            || payload.get("type").and_then(|x| x.as_str()) == Some("turn_context")
+        {
+            Some(payload)
+        } else if payload.get("type").and_then(|x| x.as_str()) == Some("thread_settings_applied") {
+            payload.get("thread_settings")
+        } else {
+            None
+        };
+        if let Some(s) = settings {
+            if let Some(c) = s.get("cwd").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
                 ctx.cwd = c.to_string();
             }
-            if let Some(m) = payload.get("model").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
+            if let Some(m) = s.get("model").and_then(|x| x.as_str()).filter(|s| !s.is_empty()) {
                 ctx.model = m.to_string();
             }
         }
@@ -398,7 +416,7 @@ mod tests {
         };
         let lines = [
             r#"{"timestamp":"2026-10-06T09:00:00Z","type":"session_meta","payload":{"id":"sess","cwd":"/nowhere/repo"}}"#.to_string(),
-            r#"{"timestamp":"2026-10-06T09:00:01Z","type":"turn_context","payload":{"type":"turn_context","cwd":"/nowhere/repo","model":"gpt-6"}}"#.to_string(),
+            r#"{"timestamp":"2026-10-06T09:00:01Z","type":"turn_context","payload":{"cwd":"/nowhere/repo","model":"gpt-6"}}"#.to_string(),
             tc("2026-10-06T09:00:02Z", 1000, 400, 50, 1050),
             tc("2026-10-06T09:00:03Z", 1000, 400, 50, 1050), // reported again
             r#"{"timestamp":"2026-10-06T09:00:04Z","type":"event_msg","payload":{"type":"token_count","info":null}}"#.to_string(),
@@ -416,6 +434,25 @@ mod tests {
         assert_eq!(turns.len(), 2);
         assert!(turns.iter().all(|t| t.0 == "/nowhere/repo" && t.1 == "gpt-6"), "{turns:?}");
         assert!(turns.iter().any(|t| t.2 == [600, 50, 400, 0]), "fresh input excludes the cached part");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn rows_read_without_their_model_get_it_on_the_next_pass() {
+        let root = tmp("codex-model");
+        let line = r#"{"timestamp":"2026-10-06T09:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":10,"output_tokens":1},"total_token_usage":{"total_tokens":11}}}}"#;
+        let ctx = r#"{"timestamp":"2026-10-06T09:00:01Z","type":"event_msg","payload":{"type":"thread_settings_applied","thread_settings":{"model":"gpt-6-astra","cwd":"/nowhere"}}}"#;
+        std::fs::write(root.join("r.jsonl"), format!("{line}\n")).unwrap();
+        let mut store = Store::memory();
+        store.set_meta("codex_read", "1"); // an older reader's database
+        Indexer::new(root.clone(), Format::Codex).scan(&mut store);
+        assert_eq!(store.turns(0, i64::MAX)[0].1, "codex");
+        std::fs::write(root.join("r.jsonl"), format!("{ctx}\n{line}\n")).unwrap();
+        store.set_meta("codex_read", "1");
+        Indexer::new(root.clone(), Format::Codex).scan(&mut store);
+        let turns = store.turns(0, i64::MAX);
+        assert_eq!(turns.len(), 1, "read again, still one row");
+        assert_eq!(turns[0].1, "gpt-6-astra");
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -220,6 +220,10 @@
         <div class="group">
           <div class="item cap">The plan is read from each login. A week of the plan costs the monthly price ÷ 4.35; a project that used 4% of the weekly allowance spent 4% of that. Type the amount you actually pay to override the list price. An API key is priced per token instead. Everything comes from the transcripts Claude Code and Codex already keep on this computer; nothing about your usage is sent anywhere.</div>
         </div>
+        <div class="group">
+          <div class="item"><span>Activity</span><button class="btn" id="btn-activity">Open Activity…</button></div>
+          <div class="item cap">Day, week and month per login: sessions per project with what each cost.</div>
+        </div>
         <div class="sec">Market data</div>
         <div class="group">
           <div class="item"><span>Exchange rate</span><span class="value" id="cost-rate" data-dynamic>—</span></div>
@@ -341,6 +345,9 @@ const PT_BR_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Mais fácil de ler de relance, e mais difícil de ignorar.',
   'Weekly ring':'Anel semanal',
   'Dashed weekly ring':'Anel semanal tracejado',
+  'Activity':'Atividade',
+  'Open Activity…':'Abrir Atividade…',
+  'Day, week and month per login: sessions per project with what each cost.':'Dia, semana e mês por login: sessões por projeto com o custo de cada uma.',
   'Costs':'Custos',
   'Billing':'Cobrança',
   'Monthly plan':'Plano mensal',
@@ -453,6 +460,9 @@ const RU_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легче читать одним взглядом, но сложнее не заметить.',
   'Weekly ring':'Недельное кольцо', 'Off':'Выкл.', 'Inside':'Внутри', 'Outside':'Снаружи',
   'Dashed weekly ring':'Пунктирное недельное кольцо',
+  'Activity':'Активность',
+  'Open Activity…':'Открыть «Активность»…',
+  'Day, week and month per login: sessions per project with what each cost.':'День, неделя и месяц по каждому входу: сеансы по проектам и их стоимость.',
   'Costs':'Расходы',
   'Billing':'Оплата',
   'Monthly plan':'Ежемесячный план',
@@ -562,6 +572,9 @@ const ZH_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好读，也更难忽视。',
   'Weekly ring':'每周圆环',
   'Dashed weekly ring':'虚线每周圆环',
+  'Activity':'活动',
+  'Open Activity…':'打开活动…',
+  'Day, week and month per login: sessions per project with what each cost.':'按登录查看日、周、月：每个项目的会话及其费用。',
   'Costs':'费用',
   'Billing':'计费',
   'Monthly plan':'月付方案',
@@ -688,6 +701,9 @@ const ZH_HANT_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好讀，也更難忽視。',
   'Weekly ring':'每週圓環',
   'Dashed weekly ring':'虛線每週圓環',
+  'Activity':'活動',
+  'Open Activity…':'開啟活動…',
+  'Day, week and month per login: sessions per project with what each cost.':'依登入查看日、週、月：每個專案的工作階段及其費用。',
   'Costs':'費用',
   'Billing':'計費',
   'Monthly plan':'月付方案',
@@ -814,6 +830,9 @@ const JA_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'ひと目で読みやすく、無視しにくいサイズ。',
   'Weekly ring':'週間のリング',
   'Dashed weekly ring':'週間のリングを破線にする',
+  'Activity':'アクティビティ',
+  'Open Activity…':'アクティビティを開く…',
+  'Day, week and month per login: sessions per project with what each cost.':'ログインごとの日・週・月：プロジェクト別のセッションとそのコスト。',
   'Costs':'コスト',
   'Billing':'支払い方法',
   'Monthly plan':'月額プラン',
@@ -927,6 +946,9 @@ const KO_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'한눈에 읽기 쉽고 눈에 잘 띕니다.',
   'Weekly ring':'주간 링',
   'Dashed weekly ring':'주간 링을 점선으로 표시',
+  'Activity':'활동',
+  'Open Activity…':'활동 열기…',
+  'Day, week and month per login: sessions per project with what each cost.':'로그인별 일·주·월: 프로젝트별 세션과 각 비용.',
   'Costs':'비용',
   'Billing':'결제 방식',
   'Monthly plan':'월간 요금제',
@@ -1055,6 +1077,9 @@ const UK_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легше прочитати одним поглядом і важче не помітити.',
   'Weekly ring':'Тижневе кільце',
   'Dashed weekly ring':'Пунктирне тижневе кільце',
+  'Activity':'Активність',
+  'Open Activity…':'Відкрити «Активність»…',
+  'Day, week and month per login: sessions per project with what each cost.':'День, тиждень і місяць для кожного входу: сеанси за проєктами та їхня вартість.',
   'Costs':'Витрати',
   'Billing':'Оплата',
   'Monthly plan':'Щомісячний план',
@@ -1870,6 +1895,9 @@ function renderCosts(){
 function refreshCosts(){
   return call('get_cost_settings', undefined, null).then(v => { if(v) costSettings = v; renderCosts(); });
 }
+document.getElementById('btn-activity').addEventListener('click', () => {
+  invoke('open_activity').catch(e => strip('open_activity failed: ' + errText(e)));
+});
 document.getElementById('btn-plans').addEventListener('click', () => {
   invoke('open_data_dir').catch(e => strip('open_data_dir failed: ' + errText(e)));
 });

@@ -262,7 +262,7 @@ const NAME_MAX_CHARS: usize = 60;
 /// the raw title is markup. Leading `<tag>…</tag>` blocks and Markdown headings are dropped,
 /// `[label](link)` keeps its label, whitespace collapses, and what is left is cut to length.
 /// None when nothing readable remains, so the caller can try the next name.
-fn readable_name(raw: &str) -> Option<String> {
+pub(crate) fn readable_name(raw: &str) -> Option<String> {
     let mut rest = raw.trim_start();
     while let Some(after) = strip_leading_block(rest) {
         rest = after.trim_start();
