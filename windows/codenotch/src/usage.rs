@@ -122,6 +122,30 @@ fn profiles() -> Vec<Profile> {
     out
 }
 
+/// Every Claude account as the card names its cell ("claude", "claude@work") with its config
+/// directory, for the cost layer
+pub fn cost_accounts() -> Vec<(String, PathBuf)> {
+    profiles()
+        .into_iter()
+        .map(|p| (p.slug.as_ref().map_or_else(|| "claude".to_string(), |s| format!("claude@{s}")), p.dir))
+        .collect()
+}
+
+/// The account's plan as the cost catalog keys it. `rateLimitTier` when the catalog knows it
+/// ("default_claude_max_20x"); a Pro login's tier ("default_claude_ai") is not a plan, so
+/// `subscriptionType` names it instead ("pro" → "default_claude_pro")
+pub fn plan_tier(dir: &Path, known: impl Fn(&str) -> bool) -> Option<String> {
+    let text = CRED_NAMES.iter().find_map(|n| std::fs::read_to_string(dir.join(n)).ok())?;
+    let v: serde_json::Value = serde_json::from_str(&text).ok()?;
+    let oauth = v.get("claudeAiOauth").unwrap_or(&v);
+    let tier = oauth.get("rateLimitTier").and_then(|x| x.as_str()).filter(|t| known(t));
+    if let Some(t) = tier {
+        return Some(t.to_string());
+    }
+    let sub = oauth.get("subscriptionType").and_then(|x| x.as_str())?.trim().to_lowercase();
+    (!sub.is_empty()).then(|| format!("default_claude_{sub}"))
+}
+
 /// Every account directory, for anything that watches a profile's files (the session watcher)
 pub fn profile_dirs() -> Vec<PathBuf> {
     profiles().into_iter().map(|p| p.dir).collect()

@@ -75,7 +75,7 @@ fn now_ms() -> u64 {
         .unwrap_or(0)
 }
 
-fn codex_home() -> Option<PathBuf> {
+pub(crate) fn codex_home() -> Option<PathBuf> {
     dirs::home_dir().map(|h| h.join(".codex"))
 }
 

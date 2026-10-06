@@ -25,6 +25,7 @@ mod agy_cli;
 mod glyphs;
 mod trayicon;
 mod activity;
+mod costs;
 mod diag;
 mod carry;
 mod watcher;
@@ -1914,6 +1915,10 @@ fn main() {
             set_weekly_ring_dashed,
             get_show_usage_pace,
             set_show_usage_pace,
+            costs::get_costs,
+            costs::get_cost_settings,
+            costs::set_cost_billing,
+            costs::set_cost_price,
             get_color_transition,
             set_color_transition,
             get_watch_limit,
@@ -1996,6 +2001,7 @@ fn main() {
             glm::start(handle.clone());
             opencode::start(handle.clone());
             activity::start(handle.clone());
+            costs::start(handle.clone());
             // Collecting glyphs may read icon resources out of a few executables; do it off the main thread and push when done
             let gh = handle.clone();
             std::thread::spawn(move || reload_glyphs(&gh));

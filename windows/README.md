@@ -34,6 +34,21 @@ reports one, and **Show usage pace** (Settings → Appearance → Usage Limits, 
 adds to each timed window how far its share used runs ahead of the time gone (deficit) or
 behind it (reserved). A window whose length the provider does not state gets no pace.
 
+### Cost per project
+
+As on the Mac, the Claude and Codex cards end with a **Today / Week / Month** list. It shows
+which projects spent the account's allowance, and what that share is worth. Codenotch reads
+only the token counts in the transcripts Claude Code (`~/.claude*/projects`) and Codex
+(`~/.codex/sessions`) already keep. Each rise of the weekly limit is split across the turns of
+the same interval by token weight. Anything a rise cannot be traced to shows as *Elsewhere*.
+A week of a plan is its monthly price ÷ 4.35, so a project that used 4% of the weekly
+allowance spent 4% of that. The plan is read from each login and priced from
+`costs/plans.json`, an editable copy in the Codenotch config folder. Prices are converted to
+the currency of your locale at a daily rate from open.er-api.com. **Settings → Costs** sets
+what you actually pay, or switches a login to per-token API pricing (daily prices from
+OpenRouter). Nothing about your usage is sent anywhere. The databases live in
+`~/.local/share/codenotch/costs`.
+
 ### Codex quota recovery
 
 The direct usage endpoint remains the first choice. If it fails, Codenotch can

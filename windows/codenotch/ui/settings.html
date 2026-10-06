@@ -54,6 +54,8 @@
   .b-blue{background:linear-gradient(#4fa6ff,#0a6cff)}
   .b-indigo{background:linear-gradient(#8784ff,#5856d6)}
   .b-gray{background:linear-gradient(#a6a6ab,#727277)}
+  .b-green{background:linear-gradient(#5fd37a,#28a745)}
+  input.money{font:inherit;font-size:13px;color:var(--text);background:var(--seg-bg);border:0;border-radius:6px;padding:4px 8px;width:110px;text-align:right}
   .b-red{background:linear-gradient(#ff6d62,#dd3328)}
 
   /* ---- pane ---- */
@@ -133,6 +135,7 @@
     <div class="band" data-tauri-drag-region></div>
     <button class="row" id="tab-accounts" role="tab" aria-controls="pane-accounts" aria-selected="false" tabindex="-1"><span class="badge b-blue"><svg viewBox="0 0 12 12"><circle cx="6" cy="4" r="2.4"/><path d="M1.5 11.2c.4-2.5 2.3-3.9 4.5-3.9s4.1 1.4 4.5 3.9z"/></svg></span><span>Accounts</span></button>
     <button class="row" id="tab-appearance" role="tab" aria-controls="pane-appearance" aria-selected="false" tabindex="-1"><span class="badge b-indigo"><svg viewBox="0 0 12 12"><path d="M10 .9a.8.8 0 0 1 1.1 1.1L6.4 6.7 5.3 5.6zM4.6 6.3l1.1 1.1c.2 1.9-1.9 3.6-4.7 3.1.9-.4 1.2-1 1.3-1.8.1-1.3 1.1-2.3 2.3-2.4z"/></svg></span><span>Appearance</span></button>
+    <button class="row" id="tab-costs" role="tab" aria-controls="pane-costs" aria-selected="false" tabindex="-1"><span class="badge b-green"><svg viewBox="0 0 12 12"><path d="M1 3.2C1 2.5 1.5 2 2.2 2h7.6c.7 0 1.2.5 1.2 1.2v5.6c0 .7-.5 1.2-1.2 1.2H2.2C1.5 10 1 9.5 1 8.8zM6 4.2a1.8 1.8 0 1 0 0 3.6 1.8 1.8 0 0 0 0-3.6z"/></svg></span><span>Costs</span></button>
     <button class="row" id="tab-general" role="tab" aria-controls="pane-general" aria-selected="false" tabindex="-1"><span class="badge b-gray"><svg viewBox="0 0 24 24"><path fill-rule="evenodd" stroke="#fff" stroke-width="1.6" stroke-linejoin="round" d="M10.03 4.66L10.14 1.97 A10.20 10.20 0 0 1 13.86 1.97 L13.97 4.66A7.60 7.60 0 0 1 15.80 5.42L17.78 3.59 A10.20 10.20 0 0 1 20.41 6.22 L18.58 8.20A7.60 7.60 0 0 1 19.34 10.03L22.03 10.14 A10.20 10.20 0 0 1 22.03 13.86 L19.34 13.97A7.60 7.60 0 0 1 18.58 15.80L20.41 17.78 A10.20 10.20 0 0 1 17.78 20.41 L15.80 18.58A7.60 7.60 0 0 1 13.97 19.34L13.86 22.03 A10.20 10.20 0 0 1 10.14 22.03 L10.03 19.34A7.60 7.60 0 0 1 8.20 18.58L6.22 20.41 A10.20 10.20 0 0 1 3.59 17.78 L5.42 15.80A7.60 7.60 0 0 1 4.66 13.97L1.97 13.86 A10.20 10.20 0 0 1 1.97 10.14 L4.66 10.03A7.60 7.60 0 0 1 5.42 8.20L3.59 6.22 A10.20 10.20 0 0 1 6.22 3.59 L8.20 5.42A7.60 7.60 0 0 1 10.03 4.66 ZM7.90 12a4.10 4.10 0 1 0 8.20 0a4.10 4.10 0 1 0 -8.20 0Z"/></svg></span><span>General</span></button>
     <div class="grow" data-tauri-drag-region></div>
     <button class="row" id="quit"><span class="badge b-red"><svg viewBox="0 0 12 12"><path d="M6 1.2v4.3" stroke="#fff" stroke-width="1.5" stroke-linecap="round" fill="none"/><path d="M3.4 3.1a3.9 3.9 0 1 0 5.2 0" stroke="#fff" stroke-width="1.5" stroke-linecap="round" fill="none"/></svg></span><span>Quit Codenotch</span></button>
@@ -207,6 +210,22 @@
             </select>
           </div>
           <div class="item cap" id="cap-language">Sets the language used by Codenotch. “Follow system” uses the language Windows itself is set to.</div>
+        </div>
+      </section>
+
+      <section class="pane" id="pane-costs" role="tabpanel" aria-labelledby="tab-costs" hidden>
+        <div class="item cap">What each project spent of each login's allowance.</div>
+        <div id="cost-accounts" data-dynamic></div>
+        <div class="sec">How the money is worked out</div>
+        <div class="group">
+          <div class="item cap">The plan is read from each login. A week of the plan costs the monthly price ÷ 4.35; a project that used 4% of the weekly allowance spent 4% of that. Type the amount you actually pay to override the list price. An API key is priced per token instead. Everything comes from the transcripts Claude Code and Codex already keep on this computer; nothing about your usage is sent anywhere.</div>
+        </div>
+        <div class="sec">Market data</div>
+        <div class="group">
+          <div class="item"><span>Exchange rate</span><span class="value" id="cost-rate" data-dynamic>—</span></div>
+          <div class="item"><span>Per-token prices</span><span class="value" id="cost-models" data-dynamic>—</span></div>
+          <div class="item"><span>Plan catalog</span><button class="btn" id="btn-plans">Open folder</button></div>
+          <div class="item cap">Refreshed once a day, no account needed: the exchange rate from open.er-api.com, and per-token prices from OpenRouter while a login is billed per token. Plans live in costs/plans.json in the Codenotch folder, where you can edit them.</div>
         </div>
       </section>
 
@@ -322,6 +341,21 @@ const PT_BR_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Mais fácil de ler de relance, e mais difícil de ignorar.',
   'Weekly ring':'Anel semanal',
   'Dashed weekly ring':'Anel semanal tracejado',
+  'Costs':'Custos',
+  'Billing':'Cobrança',
+  'Monthly plan':'Plano mensal',
+  'API key (per token)':'Chave de API (por token)',
+  'Monthly price':'Preço mensal',
+  'Exchange rate':'Câmbio',
+  'Not fetched yet':'Ainda não obtido',
+  'Plan catalog':'Catálogo de planos',
+  'Per-token prices':'Preços por token',
+  'Market data':'Dados de mercado',
+  'How the money is worked out':'Como o valor é calculado',
+  'Plan':'Plano',
+  'models':'modelos',
+  ' a month':' por mês',
+  'What each project spent of each login\'s allowance.':'Quanto cada projeto gastou da franquia de cada login.',
   'Show usage pace':'Exibir ritmo de uso',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Compara cada cota com o tempo restante até a renovação e mostra quando o uso está em déficit ou em reserva.',
   'Off':'Desativado',
@@ -419,6 +453,21 @@ const RU_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легче читать одним взглядом, но сложнее не заметить.',
   'Weekly ring':'Недельное кольцо', 'Off':'Выкл.', 'Inside':'Внутри', 'Outside':'Снаружи',
   'Dashed weekly ring':'Пунктирное недельное кольцо',
+  'Costs':'Расходы',
+  'Billing':'Оплата',
+  'Monthly plan':'Ежемесячный план',
+  'API key (per token)':'API-ключ (за токены)',
+  'Monthly price':'Цена в месяц',
+  'Exchange rate':'Курс',
+  'Not fetched yet':'Ещё не получен',
+  'Plan catalog':'Каталог планов',
+  'Per-token prices':'Цены за токен',
+  'Market data':'Рыночные данные',
+  'How the money is worked out':'Как считаются деньги',
+  'Plan':'План',
+  'models':'моделей',
+  ' a month':' в месяц',
+  'What each project spent of each login\'s allowance.':'Сколько каждый проект израсходовал из лимита каждого входа.',
   'Show usage pace':'Показывать темп использования',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Сравнивает каждый лимит по времени с оставшимся до сброса временем и показывает дефицит или запас квоты.',
   'One ring per provider, showing the headline limit. The weekly allowance stays in the hover card.':'Одно кольцо на провайдера с основным лимитом. Недельная квота остаётся в карточке при наведении.',
@@ -513,6 +562,21 @@ const ZH_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好读，也更难忽视。',
   'Weekly ring':'每周圆环',
   'Dashed weekly ring':'虚线每周圆环',
+  'Costs':'费用',
+  'Billing':'计费',
+  'Monthly plan':'月付方案',
+  'API key (per token)':'API 密钥（按 token）',
+  'Monthly price':'每月价格',
+  'Exchange rate':'汇率',
+  'Not fetched yet':'尚未获取',
+  'Plan catalog':'方案目录',
+  'Per-token prices':'按 token 价格',
+  'Market data':'市场数据',
+  'How the money is worked out':'金额如何计算',
+  'Plan':'方案',
+  'models':'个模型',
+  ' a month':' 每月',
+  'What each project spent of each login\'s allowance.':'每个项目花掉了每个登录额度的多少。',
   'Show usage pace':'显示用量节奏',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'把每段有时限的额度与距离重置的时间比较，显示透支还是留有余量。',
   'Off':'关闭',
@@ -624,6 +688,21 @@ const ZH_HANT_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好讀，也更難忽視。',
   'Weekly ring':'每週圓環',
   'Dashed weekly ring':'虛線每週圓環',
+  'Costs':'費用',
+  'Billing':'計費',
+  'Monthly plan':'月付方案',
+  'API key (per token)':'API 金鑰（按 token）',
+  'Monthly price':'每月價格',
+  'Exchange rate':'匯率',
+  'Not fetched yet':'尚未取得',
+  'Plan catalog':'方案目錄',
+  'Per-token prices':'按 token 價格',
+  'Market data':'市場資料',
+  'How the money is worked out':'金額如何計算',
+  'Plan':'方案',
+  'models':'個模型',
+  ' a month':' 每月',
+  'What each project spent of each login\'s allowance.':'每個專案花掉了每個登入額度的多少。',
   'Show usage pace':'顯示用量節奏',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'把每段有時限的額度與距離重置的時間比較，顯示透支還是留有餘量。',
   'Off':'關閉',
@@ -735,6 +814,21 @@ const JA_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'ひと目で読みやすく、無視しにくいサイズ。',
   'Weekly ring':'週間のリング',
   'Dashed weekly ring':'週間のリングを破線にする',
+  'Costs':'コスト',
+  'Billing':'支払い方法',
+  'Monthly plan':'月額プラン',
+  'API key (per token)':'API キー（トークン課金）',
+  'Monthly price':'月額',
+  'Exchange rate':'為替レート',
+  'Not fetched yet':'未取得',
+  'Plan catalog':'プランカタログ',
+  'Per-token prices':'トークン単価',
+  'Market data':'市場データ',
+  'How the money is worked out':'金額の計算方法',
+  'Plan':'プラン',
+  'models':'モデル',
+  ' a month':' / 月',
+  'What each project spent of each login\'s allowance.':'各ログインの利用枠を、どのプロジェクトがどれだけ使ったか。',
   'Show usage pace':'使用ペースを表示',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'時間で区切られた枠ごとに、リセットまでの残り時間と比べて、超過分か余裕分かを示します。',
   'Off':'オフ',
@@ -833,6 +927,21 @@ const KO_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'한눈에 읽기 쉽고 눈에 잘 띕니다.',
   'Weekly ring':'주간 링',
   'Dashed weekly ring':'주간 링을 점선으로 표시',
+  'Costs':'비용',
+  'Billing':'결제 방식',
+  'Monthly plan':'월간 요금제',
+  'API key (per token)':'API 키 (토큰당)',
+  'Monthly price':'월 요금',
+  'Exchange rate':'환율',
+  'Not fetched yet':'아직 가져오지 않음',
+  'Plan catalog':'요금제 목록',
+  'Per-token prices':'토큰당 가격',
+  'Market data':'시장 데이터',
+  'How the money is worked out':'금액 계산 방식',
+  'Plan':'요금제',
+  'models':'개 모델',
+  ' a month':' / 월',
+  'What each project spent of each login\'s allowance.':'각 로그인의 사용 한도를 어떤 프로젝트가 얼마나 썼는지.',
   'Show usage pace':'사용 속도 표시',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'기간별 할당량을 재설정까지 남은 시간과 비교해 사용량이 기준보다 초과했는지 여유가 있는지 표시합니다.',
   'Off':'끄기',
@@ -946,6 +1055,21 @@ const UK_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легше прочитати одним поглядом і важче не помітити.',
   'Weekly ring':'Тижневе кільце',
   'Dashed weekly ring':'Пунктирне тижневе кільце',
+  'Costs':'Витрати',
+  'Billing':'Оплата',
+  'Monthly plan':'Щомісячний план',
+  'API key (per token)':'API-ключ (за токени)',
+  'Monthly price':'Ціна на місяць',
+  'Exchange rate':'Курс',
+  'Not fetched yet':'Ще не отримано',
+  'Plan catalog':'Каталог планів',
+  'Per-token prices':'Ціни за токен',
+  'Market data':'Ринкові дані',
+  'How the money is worked out':'Як рахуються гроші',
+  'Plan':'План',
+  'models':'моделей',
+  ' a month':' на місяць',
+  'What each project spent of each login\'s allowance.':'Скільки кожен проєкт витратив з ліміту кожного входу.',
   'Show usage pace':'Показувати темп використання',
   'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Порівнює кожен часовий ліміт із часом, що лишився до скидання, і показує, де ліміт у дефіциті, а де в запасі.',
   'Off':'Вимк.',
@@ -1120,8 +1244,8 @@ function loadLook(){
 try { window.__TAURI__.event.listen('theme_resolved', e => { if(e.payload) applyTheme(e.payload); }); } catch(e) { /* asked for again below */ }
 
 /* ---- the sidebar -------------------------------------------------------- */
-const TABS = ['accounts', 'appearance', 'general'];
-const TITLES = { accounts:'Accounts', appearance:'Appearance', general:'General' };
+const TABS = ['accounts', 'appearance', 'costs', 'general'];
+const TITLES = { accounts:'Accounts', appearance:'Appearance', costs:'Costs', general:'General' };
 const TAB_KEY = 'codenotch.settings.pane';
 let curTab = TABS[0];
 function showTab(id, moveFocus){
@@ -1676,6 +1800,79 @@ document.getElementById('lang').addEventListener('change', e => {
 });
 
 /* ---- General --------------------------------------------------------------- */
+/* ---- Costs: how each login is paid, and what it pays ---------------------- */
+let costSettings = null;
+function costAccountName(id){
+  if(id === 'codex') return 'Codex';
+  const slug = id.split('@')[1];
+  return slug ? 'Claude (' + slug + ')' : 'Claude';
+}
+function costMoney(amount, currency){
+  try { return new Intl.NumberFormat(undefined, { style:'currency', currency }).format(amount); }
+  catch(e){ return amount.toFixed(2) + ' ' + currency; }
+}
+function renderCosts(){
+  const host = document.getElementById('cost-accounts');
+  const cs = costSettings;
+  if(!cs){ host.textContent = ''; return; }
+  host.replaceChildren();
+  if(!cs.accounts.length){
+    const g = document.createElement('div'); g.className = 'group';
+    g.innerHTML = '<div class="item cap"></div>';
+    g.firstChild.textContent = ui('No Claude Code or Codex transcripts on this computer yet.', 'No Claude Code or Codex transcripts on this computer yet.');
+    host.append(g);
+  }
+  for(const a of cs.accounts){
+    const sec = document.createElement('div'); sec.className = 'sec'; sec.textContent = costAccountName(a.id);
+    const g = document.createElement('div'); g.className = 'group';
+    const billing = document.createElement('div'); billing.className = 'item';
+    billing.innerHTML = '<span></span><span class="seg"><button data-v="subscription"></button><button data-v="api"></button></span>';
+    billing.firstChild.textContent = ui('Billing', 'Billing');
+    const [sub, api] = billing.querySelectorAll('button');
+    sub.textContent = ui('Monthly plan', 'Monthly plan');
+    api.textContent = ui('API key (per token)', 'API key (per token)');
+    for(const b of [sub, api]){
+      const on = b.dataset.v === a.billing;
+      b.classList.toggle('on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      b.addEventListener('click', () => {
+        if(b.dataset.v === a.billing) return;
+        a.billing = b.dataset.v; renderCosts();
+        call('set_cost_billing', { id: a.id, billing: a.billing }).then(() => toast());
+      });
+    }
+    g.append(billing);
+    if(a.billing === 'subscription'){
+      const price = document.createElement('div'); price.className = 'item';
+      price.innerHTML = '<span></span><input class="money" type="number" min="0" step="0.01" inputmode="decimal">';
+      price.firstChild.textContent = ui('Monthly price', 'Monthly price') + ' (' + cs.currency + ')';
+      const input = price.querySelector('input');
+      input.setAttribute('aria-label', ui('Monthly price', 'Monthly price'));
+      input.placeholder = a.list_price != null ? a.list_price.toFixed(2) : '—';
+      if(a.monthly_price > 0) input.value = String(a.monthly_price);
+      input.addEventListener('change', () => {
+        const v = parseFloat(input.value);
+        a.monthly_price = isFinite(v) && v > 0 ? v : 0;
+        call('set_cost_price', { id: a.id, price: a.monthly_price }).then(() => toast());
+      });
+      g.append(price);
+      const cap = document.createElement('div'); cap.className = 'item cap';
+      cap.textContent = a.plan
+        ? ui('Plan', 'Plan') + ': ' + a.plan + (a.list_price != null ? ' · ' + costMoney(a.list_price, cs.currency) + ui(' a month', ' a month') : '')
+        : ui('No plan read from this login yet. Type what you pay to price its projects.', 'No plan read from this login yet. Type what you pay to price its projects.');
+      g.append(cap);
+    }
+    host.append(sec, g);
+  }
+  document.getElementById('cost-rate').textContent = cs.currency === 'USD' ? '—'
+    : cs.rate ? '1 USD = ' + costMoney(cs.rate, cs.currency) : ui('Not fetched yet', 'Not fetched yet');
+  document.getElementById('cost-models').textContent = cs.models + ' ' + ui('models', 'models');
+}
+function refreshCosts(){
+  return call('get_cost_settings', undefined, null).then(v => { if(v) costSettings = v; renderCosts(); });
+}
+document.getElementById('btn-plans').addEventListener('click', () => {
+  invoke('open_data_dir').catch(e => strip('open_data_dir failed: ' + errText(e)));
+});
 document.getElementById('btn-data').addEventListener('click', () => {
   invoke('open_data_dir').catch(e => strip('open_data_dir failed: ' + errText(e)));
 });
@@ -1741,6 +1938,7 @@ function renderAll(){
   drawSwitch(document.getElementById('sw-autostart'), autostart);
   drawSwitch(document.getElementById('sw-adaptive'), adaptivePill);
   drawSwitch(document.getElementById('sw-weekly-dashed'), weeklyDashed);
+  renderCosts();
   drawSwitch(document.getElementById('sw-pace'), usagePace);
   if(updState) renderUpdate(updState);
   document.getElementById('title').textContent = ui(TITLES[curTab], TITLES[curTab]);
@@ -1777,6 +1975,7 @@ function boot(){
     autostart.refresh(),
     adaptivePill.refresh(),
     weeklyDashed.refresh(),
+    refreshCosts(),
     usagePace.refresh(),
     hooks.refresh()
   ];
