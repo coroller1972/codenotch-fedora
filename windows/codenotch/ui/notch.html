@@ -144,6 +144,15 @@
   .t-rule{height:1px;background:var(--card-line);margin:12px 0 8px}
   .t-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:1.7}
   .t-head{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:2px}
+  /* Cost per project, the Mac's CostSection: three ranges, then each project's share and its money */
+  .k-tabs{display:flex;gap:14px;font-size:12px;margin-bottom:4px}
+  .k-tabs button{all:unset;cursor:pointer;color:var(--ink-dim)}
+  .k-tabs button.on{color:var(--ink-2);font-weight:600}
+  .k-row{display:flex;gap:10px;font-size:12px;line-height:1.7}
+  .k-row .k-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink-2)}
+  .k-row.k-dim .k-name{color:var(--ink-dim)}
+  .k-row .k-num{flex:none;color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .k-row .k-money{min-width:56px;text-align:right}
   .t-row .t-value{color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
   .t-chart{display:flex;align-items:flex-end;gap:2px;height:44px;margin-top:8px;border-bottom:1px solid var(--card-line)}
   .t-chart>div{flex:1;min-width:0;background:var(--ink-dim);border-radius:2px 2px 0 0}
@@ -522,6 +531,39 @@ function tokenUsageHtml(u){
     +row('Today',today==null?textCopy('Pending'):tokensText(today))
     +row('30-day tokens',tokensText(days.reduce((a,d)=>a+d.tokens,0)))
     +`<div class="t-chart" aria-hidden="true">${days.map(d=>`<div style="height:${(d.tokens/max*100).toFixed(1)}%"></div>`).join('')}</div>`;
+}
+// Cost per project, asked of the costs module per cell and range and kept for half a minute; a
+// "costs" event (new turns, a new reading, a changed price) drops what is kept
+const costCache={};
+let costRange=(()=>{ try{ return localStorage.getItem('costRange')||'week'; }catch(e){ return 'week'; } })();
+function costView(id){
+  const key=id+'|'+costRange, hit=costCache[key];
+  if((!hit||Date.now()-hit.at>30000)&&!(hit&&hit.pending)){
+    costCache[key]={view:hit&&hit.view,at:hit?hit.at:0,pending:true};
+    invoke('get_costs',{id,range:costRange}).then(v=>{
+      costCache[key]={view:v,at:Date.now()};
+      if(card.classList.contains('show')&&hoverId===id) renderCard();
+    }).catch(()=>{ costCache[key]={view:hit&&hit.view,at:Date.now()}; });
+  }
+  return hit&&hit.view;
+}
+// The amount in the user's currency, cents only below ten, as the Mac's MoneyFormat
+function moneyLocal(amount,currency){
+  const digits=amount<10?2:0;
+  try{ return new Intl.NumberFormat(ui().locale,{style:'currency',currency,maximumFractionDigits:digits,minimumFractionDigits:digits}).format(amount); }
+  catch(e){ return amount.toFixed(2)+' '+currency; }
+}
+function costHtml(v){
+  if(!v||v.state!=='ready') return '';
+  const t=ui().costTabs||UI.en.costTabs;
+  const tabs=['today',...(v.quota_backed?['week']:[]),'month'];
+  let html=`<div class="t-rule"></div><div class="k-tabs">${tabs.map(r=>`<button data-range="${r}" class="${r===v.range?'on':''}">${esc(t[r])}</button>`).join('')}</div>`;
+  for(const r of v.rows){
+    const name=r.unexplained?ui().elsewhere:r.merged>0?ui().otherN(r.merged):r.name;
+    const money=r.cost!=null?moneyLocal(r.cost,v.currency):'';
+    html+=`<div class="k-row${r.unexplained||r.merged?' k-dim':''}" title="${esc(r.unexplained||r.merged?'':r.path)}"><span class="k-name">${esc(name)}</span><span class="k-num">${esc(pctText(Math.min(r.pct,100)/100))}%</span>${money?`<span class="k-num k-money">${esc(money)}</span>`:''}</div>`;
+  }
+  return html;
 }
 let usage={status:'',windows:[],fetched_at:0,note:''};
 let codexSnap={status:'absent',windows:[],fetched_at:0,note:''};
@@ -1146,43 +1188,50 @@ const PATTERNS={
 // Grammar differs enough that a format string would not carry it — Russian puts the verb last,
 // Chinese puts it after the time — so each language writes its own short functions.
 const UI={
-  ko:{unusedTitle:'미사용 리셋',unused:n=>n===1?'미사용 리셋 1개':`미사용 리셋 ${n}개`,expires:(d,next)=>next?`다음 만료 ${d}`:`${d}에 만료`,
+  ko:{costTabs:{today:'오늘',week:'주',month:'월'},elsewhere:'다른 곳',otherN:n=>`기타 (${n})`,
+      unusedTitle:'미사용 리셋',unused:n=>n===1?'미사용 리셋 1개':`미사용 리셋 ${n}개`,expires:(d,next)=>next?`다음 만료 ${d}`:`${d}에 만료`,
       pace:(v,d)=>d?`${v}% 초과`:`${v}% 여유`,usedOnly:p=>`${p}% 사용`,
       locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
       resetsAt:t=>`${t}에 재설정`,resetsOn:(d,t)=>`${d} ${t}에 재설정`,resetsDate:d=>`${d}에 재설정`,
       ago:m=>m<60?`${m}분 전`:`${Math.round(m/60)}시간 전`,
       usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
-  'pt-BR':{unusedTitle:'Reinicializações não usadas',unused:n=>n===1?'1 reinicialização não usada':`${n} reinicializações não usadas`,expires:(d,next)=>next?`A próxima expira ${d}`:`Expira ${d}`,
+  'pt-BR':{costTabs:{today:'Hoje',week:'Semana',month:'Mês'},elsewhere:'Outros',otherN:n=>`Outros (${n})`,
+      unusedTitle:'Reinicializações não usadas',unused:n=>n===1?'1 reinicialização não usada':`${n} reinicializações não usadas`,expires:(d,next)=>next?`A próxima expira ${d}`:`Expira ${d}`,
       pace:(v,d)=>d?`${v}% de déficit`:`${v}% em reserva`,usedOnly:p=>`${p}% usado`,updated:a=>`Atualizado ${a}`,
       locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
       resetsAt:t=>`Renova às ${t}`,resetsOn:(d,t)=>`Renova ${d} às ${t}`,resetsDate:d=>`Renova ${d}`,
       ago:m=>m<60?`há ${m} min`:`há ${Math.round(m/60)} h`,
       usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,andMore:n=>`e mais ${n}`},
-  en:{unusedTitle:'Unused resets',unused:n=>n===1?'1 unused reset':`${n} unused resets`,expires:(d,next)=>next?`Next expires ${d}`:`Expires ${d}`,
+  en:{costTabs:{today:'Today',week:'Week',month:'Month'},elsewhere:'Elsewhere',otherN:n=>`Other (${n})`,
+      unusedTitle:'Unused resets',unused:n=>n===1?'1 unused reset':`${n} unused resets`,expires:(d,next)=>next?`Next expires ${d}`:`Expires ${d}`,
       pace:(v,d)=>d?`${v}% deficit`:`${v}% reserved`,usedOnly:p=>`${p}% used`,
       locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
       resetsAt:t=>`Resets at ${t}`,resetsOn:(d,t)=>`Resets ${d} ${t}`,resetsDate:d=>`Resets ${d}`,
       ago:m=>m<60?`${m}m ago`:`${Math.round(m/60)}h ago`,
       usedLeft:(used,left)=>`${used}% Used · ${left}% left`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
-  uk:{unusedTitle:'Невикористані скидання',unused:n=>n===1?'1 невикористане скидання':`${n} невикористаних скидань`,expires:(d,next)=>next?`Наступне спливає ${d}`:`Спливає ${d}`,
+  uk:{costTabs:{today:'Сьогодні',week:'Тиждень',month:'Місяць'},elsewhere:'Деінде',otherN:n=>`Інші (${n})`,
+      unusedTitle:'Невикористані скидання',unused:n=>n===1?'1 невикористане скидання':`${n} невикористаних скидань`,expires:(d,next)=>next?`Наступне спливає ${d}`:`Спливає ${d}`,
       pace:(v,d)=>d?`${v}% дефіциту`:`${v}% запасу`,usedOnly:p=>`Використано ${p}%`,
       locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
       resetsAt:t=>`Скидання о ${t}`,resetsOn:(d,t)=>`Скидання: ${d} ${t}`,resetsDate:d=>`Скидання: ${d}`,
       ago:m=>m<60?`${m} хв тому`:`${Math.round(m/60)} год тому`,
       usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
-  ru:{unusedTitle:'Неиспользованные сбросы',unused:n=>n===1?'1 неиспользованный сброс':`${n} неиспользованных сбросов`,expires:(d,next)=>next?`Следующий истекает ${d}`:`Истекает ${d}`,
+  ru:{costTabs:{today:'Сегодня',week:'Неделя',month:'Месяц'},elsewhere:'В другом месте',otherN:n=>`Другие (${n})`,
+      unusedTitle:'Неиспользованные сбросы',unused:n=>n===1?'1 неиспользованный сброс':`${n} неиспользованных сбросов`,expires:(d,next)=>next?`Следующий истекает ${d}`:`Истекает ${d}`,
       pace:(v,d)=>d?`дефицит ${v}%`:`резерв ${v}%`,usedOnly:p=>`Использовано ${p}%`,
       locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
       resetsAt:t=>`Сброс в ${t}`,resetsOn:(d,t)=>`Сброс: ${d} ${t}`,resetsDate:d=>`Сброс: ${d}`,
       ago:m=>m<60?`${m} мин назад`:`${Math.round(m/60)} ч назад`,
       usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
-  zh:{unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
+  zh:{costTabs:{today:'今日',week:'周',month:'月'},elsewhere:'其他地方',otherN:n=>`其他（${n}）`,
+      unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
       pace:(v,d)=>d?`${v}% 透支`:`${v}% 预留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分钟前`:`${Math.round(m/60)} 小时前`,
       usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
-  'zh-Hant':{unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
+  'zh-Hant':{costTabs:{today:'今日',week:'週',month:'月'},elsewhere:'其他地方',otherN:n=>`其他（${n}）`,
+      unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
       pace:(v,d)=>d?`${v}% 透支`:`${v}% 預留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
@@ -1510,7 +1559,10 @@ function renderCard(){
     if(group) html+=`</div>`;
     if(snap.note) html+=`<div class="c-note">${esc(textCopy(snap.note))}</div>`;
     if(snap.reset_credits) html+=resetsHtml(snap.reset_credits);
-    if(snap.token_usage) html+=tokenUsageHtml(snap.token_usage);
+    // A Claude card draws the same chart from its own transcripts, as the Mac's Costs.decorate does
+    const costs=(p.base==='claude'||p.base==='codex')?costView(p.id):null;
+    const tokens=snap.token_usage||(costs&&costs.token_usage);
+    if(tokens) html+=tokenUsageHtml(tokens);
   }
   if(offersClaudeSignIn(p)) html+=claudeAuthHtml(claudeAuth,claudeActionMessage);
   if(p.base==='claude'){ // live sessions (a full list with jump-to-session is a follow-up)
@@ -1534,7 +1586,11 @@ function renderCard(){
       html+=moreRow(acts.length-SESSION_ROWS)+`</div>`;
     }
   }
+  if(p.base==='claude'||p.base==='codex') html+=costHtml(costView(p.id));
   c.innerHTML=html;
+  for(const b of c.querySelectorAll('.k-tabs button[data-range]')){
+    b.onclick=e=>{ e.stopPropagation(); costRange=b.dataset.range; try{ localStorage.setItem('costRange',costRange); }catch(err){} renderCard(); };
+  }
   const signIn=c.querySelector('#claude-sign-in');
   if(signIn) signIn.onclick=e=>{e.stopPropagation();signInClaude();};
   placeCard();
@@ -2285,6 +2341,7 @@ function setUsagePace(on,from){
 }
 invoke('get_show_usage_pace').then(v=>setUsagePace(v,'startup')).catch(e=>jslog('get_show_usage_pace failed: '+e));
 listen('show_usage_pace',e=>setUsagePace(e.payload,'settings')).catch(e=>jslog('listen show_usage_pace failed: '+e));
+listen('costs',()=>{ for(const k in costCache) costCache[k].at=0; if(card.classList.contains('show')) renderCard(); }).catch(()=>{});
 listen('weekly_ring_dashed',e=>{if(typeof e.payload==='boolean'){weeklyRingDashed=e.payload;renderRing();}}).catch(()=>{});
 invoke('get_watch_limit').then(v=>{if(typeof v==='number'){watchLimit=v;renderRing();}}).catch(()=>{});
 listen('watch_limit',e=>{if(typeof e.payload==='number'){watchLimit=e.payload;renderRing();}}).catch(()=>{});
