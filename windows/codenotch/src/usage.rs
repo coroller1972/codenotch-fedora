@@ -176,6 +176,36 @@ pub struct UsageSnapshot {
     /// Mac. None where the provider names none
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan: Option<String>,
+    /// Token statistics from the provider's profile (Codex only, upstream `CodexTokenUsage`):
+    /// the card lists them and draws the last 30 days as bars. None = nothing to show
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_usage: Option<TokenUsage>,
+}
+
+/// Lifetime figures and per-day tokens, exactly as the provider published them. Each figure
+/// is optional on its own: a missing one is shown as a dash, never as zero
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct TokenUsage {
+    #[serde(default)]
+    pub lifetime_tokens: Option<u64>,
+    #[serde(default)]
+    pub peak_daily_tokens: Option<u64>,
+    #[serde(default)]
+    pub longest_turn_secs: Option<f64>,
+    #[serde(default)]
+    pub current_streak_days: Option<u64>,
+    #[serde(default)]
+    pub longest_streak_days: Option<u64>,
+    /// One entry per day that has one, keyed by its calendar day ("2026-10-06"). A day the
+    /// provider has not published yet is absent, which the card reads as pending, not zero
+    #[serde(default)]
+    pub daily: Vec<DailyTokens>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct DailyTokens {
+    pub date: String,
+    pub tokens: u64,
 }
 
 /// The plan the way the Mac card writes it (`ClaudeOAuthProvider.planName`): an all-lowercase

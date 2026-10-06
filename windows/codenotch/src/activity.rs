@@ -253,6 +253,77 @@ fn codex_last_step(text: &str) -> Option<(CodexStep, u64)> {
 /// The app maintains this turn table itself, which is far more reliable than a file mtime. Guard
 /// against "inProgress forever after a crash": no new item for the thread in the last 10 minutes
 /// (`thread_items.created_at_ms`) while the turn started more than 2 minutes ago → treated as stale.
+/// Longest name an activity row carries; the card ellipsises anything wider than it has room for
+const NAME_MAX_CHARS: usize = 60;
+
+/// A thread's title as someone would name it. Codex stores the opening message as the title when
+/// it has no better one, and the desktop app puts context blocks ahead of that message
+/// (`<in-app-browser-context …>…</in-app-browser-context>`, then a `## My request:` heading), so
+/// the raw title is markup. Leading `<tag>…</tag>` blocks and Markdown headings are dropped,
+/// `[label](link)` keeps its label, whitespace collapses, and what is left is cut to length.
+/// None when nothing readable remains, so the caller can try the next name.
+fn readable_name(raw: &str) -> Option<String> {
+    let mut rest = raw.trim_start();
+    while let Some(after) = strip_leading_block(rest) {
+        rest = after.trim_start();
+    }
+    let text: Vec<&str> = rest
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    let words = unlink(&text.join(" "));
+    let words = words.split_whitespace().collect::<Vec<_>>().join(" ");
+    if words.is_empty() {
+        return None;
+    }
+    Some(if words.chars().count() > NAME_MAX_CHARS {
+        words.chars().take(NAME_MAX_CHARS - 1).collect::<String>().trim_end().to_string() + "…"
+    } else {
+        words
+    })
+}
+
+/// `<name …>…</name>` at the very start → what follows it. Only a block that is closed counts:
+/// a request that merely begins with "<" is the request, not markup
+fn strip_leading_block(s: &str) -> Option<&str> {
+    let tag = s.strip_prefix('<')?;
+    let name_len = tag.find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))?;
+    if name_len == 0 || !tag.as_bytes()[0].is_ascii_alphabetic() {
+        return None;
+    }
+    let closing = format!("</{}>", &tag[..name_len]);
+    let end = s.find(&closing)?;
+    Some(&s[end + closing.len()..])
+}
+
+/// `[label](target)` → `label`; anything else is left as written
+fn unlink(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(open) = rest.find('[') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        let link = after.find("](").and_then(|mid| {
+            let label = &after[..mid];
+            let close = after[mid + 2..].find(')')?;
+            (!label.contains('[')).then(|| (label, mid + 2 + close + 1))
+        });
+        match link {
+            Some((label, used)) => {
+                out.push_str(label);
+                rest = &after[used..];
+            }
+            None => {
+                out.push('[');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn codex_turns_in_progress(ctx: &mut Ctx) -> Vec<Activity> {
     let now = now_ms();
     if ctx.codex_names.is_none() {
@@ -291,15 +362,10 @@ fn codex_turns_in_progress(ctx: &mut Ctx) -> Vec<Activity> {
                     [&thread_id],
                     |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)),
                 ) {
-                    name = if !title.trim().is_empty() {
-                        title
-                    } else if !first.trim().is_empty() {
-                        first.chars().take(40).collect()
-                    } else if !nick.trim().is_empty() {
-                        format!("Agent {nick}")
-                    } else {
-                        String::new()
-                    };
+                    name = readable_name(&title)
+                        .or_else(|| readable_name(&first))
+                        .or_else(|| (!nick.trim().is_empty()).then(|| format!("Agent {}", nick.trim())))
+                        .unwrap_or_default();
                 }
             }
             if name.is_empty() {
@@ -617,4 +683,36 @@ pub fn start(app: AppHandle) {
             std::thread::sleep(INTERVAL);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::readable_name;
+
+    #[test]
+    fn injected_context_is_not_the_name() {
+        let raw = "<in-app-browser-context source=\"ambient-ui-state\">\nThis block is supplied state.\n<tab url=\"x\"/>\n</in-app-browser-context>\n\n## My request:\n[@Notion](plugin://notion@openai-curated-remote) peux tu ajouter la page";
+        assert_eq!(readable_name(raw).as_deref(), Some("@Notion peux tu ajouter la page"));
+    }
+
+    #[test]
+    fn plain_titles_are_kept_and_long_ones_cut() {
+        assert_eq!(readable_name("Guardian review").as_deref(), Some("Guardian review"));
+        let long = "word ".repeat(30);
+        let name = readable_name(&long).unwrap();
+        assert_eq!(name.chars().count(), 60);
+        assert!(name.ends_with('…'));
+    }
+
+    #[test]
+    fn a_request_that_only_starts_with_a_bracket_is_left_alone() {
+        assert_eq!(readable_name("<input> is empty on submit").as_deref(), Some("<input> is empty on submit"));
+        assert_eq!(readable_name("fix [the] link (soon)").as_deref(), Some("fix [the] link (soon)"));
+    }
+
+    #[test]
+    fn nothing_readable_falls_through() {
+        assert_eq!(readable_name("   "), None);
+        assert_eq!(readable_name("<environment_context>cwd</environment_context>\n## Context"), None);
+    }
 }
