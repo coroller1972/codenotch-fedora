@@ -782,6 +782,25 @@ fn split_persisted(snap: &UsageSnapshot, order: &[Profile]) -> HashMap<String, V
     out
 }
 
+/// Each account as it was saved: its windows, and with them the status and time of the reading
+/// they came from. Windows alone left the status empty until the first answer, so a restart that
+/// met a 429 first read as signed out ("Sign in to Claude Code…") over a perfectly good reading,
+/// and with no time the card could not say how old it was. One account also gets its unused
+/// resets back; several share one saved status and time, which is the best any of them had.
+fn restore(persisted: &UsageSnapshot, order: &[Profile]) -> HashMap<String, Account> {
+    let mut accounts: HashMap<String, Account> = HashMap::new();
+    for (k, windows) in split_persisted(persisted, order) {
+        let acc = accounts.entry(k).or_default();
+        acc.windows = windows;
+        acc.status = persisted.status.clone();
+        acc.fetched_at = persisted.fetched_at;
+        if order.len() == 1 {
+            acc.resets = persisted.reset_credits.clone();
+        }
+    }
+    accounts
+}
+
 /// One reading out of every account's, in profile order. The status is the best news any account has:
 /// a second account that needs signing in must not dim a first one that just answered.
 fn aggregate(order: &[Profile], accounts: &HashMap<String, Account>) -> UsageSnapshot {
@@ -888,6 +907,11 @@ fn poll_account(p: &Profile, acc: &mut Account, group: Option<&str>) {
                     // status until `staleAfter`), and the note says why it is not moving.
                     acc.note = format!("Rate limited, retrying in {wait}s");
                     acc.backoff_until = now_ms() + wait * 1000;
+                    // Nothing read yet and nothing saved: still not "signed out", which is what an
+                    // empty status becomes
+                    if acc.status.is_empty() {
+                        acc.status = "error".into();
+                    }
                 }
                 Err(FetchErr::Other(msg)) => {
                     // No reading at all is an error worth showing; a reading we could not refresh is
@@ -911,10 +935,7 @@ pub fn start(app: AppHandle) {
             let _ = app.emit("usage", &snap);
             snap
         };
-        let mut accounts: HashMap<String, Account> = HashMap::new();
-        for (k, windows) in split_persisted(&persisted, &profiles()) {
-            accounts.entry(k).or_default().windows = windows;
-        }
+        let mut accounts = restore(&persisted, &profiles());
         loop {
             // A sign-in the user started owns the credential until it finishes. Polling through it
             // reads a file being rewritten and reports a signed-out account mid-login.
@@ -1223,5 +1244,30 @@ mod tests {
         assert_eq!(claude_reset_credits(&serde_json::json!({}), now), None);
         let other = claude_reset_credits(&ember(false, Some("plan"), serde_json::json!([])), now).unwrap();
         assert_eq!(other.available_count, 0, "ineligible for any other reason is a real none");
+    }
+
+    #[test]
+    fn a_restart_keeps_the_saved_reading_whole() {
+        let order = vec![prof(None)];
+        let saved = UsageSnapshot {
+            status: "ok".into(),
+            windows: vec![win("session")],
+            fetched_at: 1234,
+            reset_credits: Some(ResetCredits { available_count: 1, credits: vec![] }),
+            ..Default::default()
+        };
+        let accounts = restore(&saved, &order);
+        let snap = aggregate(&order, &accounts);
+        assert_eq!(snap.status, "ok", "not needsAuth before the first answer");
+        assert_eq!(snap.fetched_at, 1234, "the card can still say how old it is");
+        assert_eq!(snap.reset_credits.map(|r| r.available_count), Some(1));
+    }
+
+    #[test]
+    fn nothing_saved_is_still_nothing() {
+        let order = vec![prof(None)];
+        let accounts = restore(&UsageSnapshot::default(), &order);
+        assert!(accounts.is_empty());
+        assert_eq!(aggregate(&order, &accounts).status, "needsAuth");
     }
 }
