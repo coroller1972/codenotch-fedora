@@ -150,6 +150,7 @@ fn parse_quota(text: &str) -> Result<Vec<LimitWindow>, String> {
         let lane = crate::antigravity::lane_name(&label).filter(|_| group.is_some());
         out.push(LimitWindow {
             label: lane.map_or(short_label, String::from),
+            duration: group.as_ref().and_then(|_| crate::antigravity::lane_duration(&label)),
             group,
             id: label,
             used: ((100.0 - remaining) / 100.0).clamp(0.0, 1.0),

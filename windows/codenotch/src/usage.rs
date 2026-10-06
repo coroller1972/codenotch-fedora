@@ -144,6 +144,23 @@ pub struct LimitWindow {
     /// for several things (Antigravity: a 5-hour and a weekly lane per model family). None = ungrouped
     #[serde(default)]
     pub group: Option<String>,
+    /// The window's full length in seconds, where the provider states or implies it (upstream
+    /// `LimitWindow.duration`). With `resets_at` it is what the card's usage pace compares the
+    /// share used against. None = unknown, and then no pace is shown rather than a guessed one
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration: Option<u64>,
+    /// A money balance rather than a quota (upstream `UsageMoneyBreakdown`): the card draws it as
+    /// spent / remaining / funded. `used` still carries spent ÷ funded, for the ring and the tray
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub money: Option<Money>,
+}
+
+/// Amounts as the provider reported them, in `currency`'s major unit (dollars, not cents)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct Money {
+    pub currency: String,
+    pub spent: f64,
+    pub remaining: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -155,6 +172,22 @@ pub struct UsageSnapshot {
     pub note: String,
     #[serde(default)]
     pub backoff_until: u64,
+    /// The account's named tier ("Max", "Plus", "Pro"…), shown under the card's title as on the
+    /// Mac. None where the provider names none
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan: Option<String>,
+}
+
+/// The plan the way the Mac card writes it (`ClaudeOAuthProvider.planName`): an all-lowercase
+/// wire name ("max", "plus") gets a capital, anything else ("Pro+", "SuperGrok") is left alone,
+/// and blank is no plan
+pub fn plan_name(raw: Option<&str>) -> Option<String> {
+    let plan = raw.map(str::trim).filter(|p| !p.is_empty())?;
+    if !plan.chars().all(char::is_lowercase) {
+        return Some(plan.to_string());
+    }
+    let mut c = plan.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str())
 }
 
 fn store_path() -> std::path::PathBuf {
@@ -428,6 +461,52 @@ fn label_for(kind: &str) -> String {
     }
 }
 
+/// The window's length, as upstream's `UsageResponse.duration(forKind:)`: the session is five
+/// hours, every weekly kind a week, anything else unknown
+fn duration_for(kind: &str) -> Option<u64> {
+    match kind {
+        "session" | "five_hour" => Some(5 * 3600),
+        k if k.starts_with("weekly") || k.starts_with("seven_day") => Some(7 * 86400),
+        _ => None,
+    }
+}
+
+/// `spend` as a money window, or None where the seat has no credit spending. Upstream's
+/// `spendWindow`: the share is the two amounts divided rather than `spend.percent`, which is
+/// rounded to whole percent and would put the bar visibly off the figures beside it. Amounts
+/// arrive in minor units with their own exponent (20000 with exponent 2 is 200.00).
+fn spend_window(v: &serde_json::Value) -> Option<LimitWindow> {
+    let spend = v.get("spend").filter(|x| x.is_object())?;
+    if spend.get("enabled").and_then(|x| x.as_bool()) == Some(false) {
+        return None;
+    }
+    let amount = |key: &str| -> Option<(f64, Option<String>)> {
+        let a = spend.get(key)?;
+        let minor = a.get("amount_minor").and_then(|x| x.as_f64())?;
+        let exponent = a.get("exponent").and_then(|x| x.as_i64()).unwrap_or(2);
+        let currency = a.get("currency").and_then(|x| x.as_str()).map(String::from);
+        Some((minor / 10f64.powi(exponent as i32), currency))
+    };
+    let (used, used_currency) = amount("used")?;
+    let (limit, limit_currency) = amount("limit")?;
+    if !(limit > 0.0) || !used.is_finite() {
+        return None;
+    }
+    Some(LimitWindow {
+        id: "spend".into(),
+        label: "Spend limit".into(),
+        used: (used / limit).clamp(0.0, 1.0),
+        // No reset time: the response carries none for this block, and a balance still says
+        // what it says without one
+        money: Some(Money {
+            currency: limit_currency.or(used_currency).unwrap_or_else(|| "USD".into()),
+            spent: used,
+            remaining: (limit - used).max(0.0),
+        }),
+        ..Default::default()
+    })
+}
+
 fn parse_response(v: &serde_json::Value) -> Vec<LimitWindow> {
     let mut out: Vec<LimitWindow> = Vec::new();
     if let Some(arr) = v.get("limits").and_then(|x| x.as_array()) {
@@ -446,7 +525,9 @@ fn parse_response(v: &serde_json::Value) -> Vec<LimitWindow> {
                 id: kind.to_string(),
                 label: label_for(kind),
                 used: (pct / 100.0).clamp(0.0, 1.0),
-                resets_at: resets, ..Default::default()
+                resets_at: resets,
+                duration: duration_for(kind),
+                ..Default::default()
             });
         }
     }
@@ -474,10 +555,21 @@ fn parse_response(v: &serde_json::Value) -> Vec<LimitWindow> {
         if dup {
             continue;
         }
-        out.push(LimitWindow { id: id.into(), label, used, resets_at, ..Default::default() });
+        out.push(LimitWindow { id: id.into(), label, used, resets_at, duration: duration_for(id), ..Default::default() });
     }
-    // session always comes first (upstream display order)
-    out.sort_by_key(|w| if w.id == "session" { 0 } else { 1 });
+    // An Enterprise seat reports only this: no limits and both named windows null, so without
+    // it such a seat has no reading at all. Nothing else in the reply is read, on purpose:
+    // several codenamed objects carry dollars and resets and look like windows, but what they
+    // limit is not published (upstream's reasoning, kept as it is)
+    if let Some(spend) = spend_window(v) {
+        out.push(spend);
+    }
+    // session always comes first (upstream display order); the balance stays last
+    out.sort_by_key(|w| match w.id.as_str() {
+        "session" => 0,
+        "spend" => 2,
+        _ => 1,
+    });
     out
 }
 
@@ -544,6 +636,8 @@ struct Account {
     status: String,
     note: String,
     fetched_at: u64,
+    /// subscriptionType from the credential, as last read
+    plan: Option<String>,
 }
 
 fn key(p: &Profile) -> String {
@@ -616,6 +710,11 @@ fn aggregate(order: &[Profile], accounts: &HashMap<String, Account>) -> UsageSna
         snap.status = "needsAuth".into();
     }
     snap.note = notes.join(" · ");
+    // One account names its plan under the card's title, as on the Mac. Several already carry
+    // theirs in each cell's heading (`Profile::group`), so a shared subtitle would only repeat one
+    if !multi {
+        snap.plan = order.first().and_then(|p| accounts.get(&key(p))).and_then(|a| plan_name(a.plan.as_deref()));
+    }
     snap
 }
 
@@ -633,7 +732,9 @@ fn poll_account(p: &Profile, acc: &mut Account, group: Option<&str>) {
     if acc.backoff_until > now_ms() {
         return;
     }
-    match read_credentials(&p.dir) {
+    let cred = read_credentials(&p.dir);
+    acc.plan = cred.as_ref().and_then(|c| c.plan.clone());
+    match cred {
         None => {
             acc.status = "needsAuth".into();
             acc.note = "No Claude Code credential found".into();
@@ -911,5 +1012,75 @@ mod tests {
         assert!(c.expired(EXP));
         assert!(!c.expired(EXP - 1));
         assert!(!Credential { token: "t".into(), expires_at: None, ..Default::default() }.expired(EXP));
+    }
+
+    #[test]
+    fn plans_are_cased_as_the_mac_writes_them() {
+        assert_eq!(plan_name(Some("max")).as_deref(), Some("Max"));
+        assert_eq!(plan_name(Some("Pro+")).as_deref(), Some("Pro+"), "an already-cased name is left alone");
+        assert_eq!(plan_name(Some("pro_plus")).as_deref(), Some("pro_plus"), "only an all-lowercase word gets a capital");
+        assert_eq!(plan_name(Some("  ")), None);
+        assert_eq!(plan_name(None), None);
+    }
+
+    #[test]
+    fn one_account_names_its_plan_and_several_do_not() {
+        let one = vec![prof(None)];
+        let mut accounts: HashMap<String, Account> = HashMap::new();
+        accounts.insert(key(&one[0]), Account { status: "ok".into(), plan: Some("max".into()), ..Default::default() });
+        assert_eq!(aggregate(&one, &accounts).plan.as_deref(), Some("Max"));
+        let two = vec![prof(None), prof(Some("work"))];
+        accounts.insert(key(&two[1]), Account { status: "ok".into(), plan: Some("pro".into()), ..Default::default() });
+        assert_eq!(aggregate(&two, &accounts).plan, None, "each cell's heading already carries its plan");
+    }
+
+    #[test]
+    fn windows_carry_their_length() {
+        let v = serde_json::json!({
+            "limits": [
+                {"kind": "session", "percent": 10, "resets_at": "2026-10-06T12:00:00Z"},
+                {"kind": "weekly_all", "percent": 20, "resets_at": "2026-10-10T12:00:00Z"},
+                {"kind": "something_new", "percent": 30, "resets_at": "2026-10-10T12:00:00Z"}
+            ]
+        });
+        let ws = parse_response(&v);
+        let d = |id: &str| ws.iter().find(|w| w.id == id).and_then(|w| w.duration);
+        assert_eq!(d("session"), Some(5 * 3600));
+        assert_eq!(d("weekly_all"), Some(7 * 86400));
+        assert_eq!(d("something_new"), None, "an unknown kind gets no invented length, so no pace");
+    }
+
+    #[test]
+    fn spend_is_read_from_minor_units_and_sorted_last() {
+        let v = serde_json::json!({
+            "five_hour": {"utilization": 5, "resets_at": "2026-10-06T12:00:00Z"},
+            "spend": {
+                "enabled": true,
+                "percent": 1,
+                "used": {"amount_minor": 297, "currency": "USD", "exponent": 2},
+                "limit": {"amount_minor": 20000, "currency": "USD", "exponent": 2}
+            }
+        });
+        let ws = parse_response(&v);
+        assert_eq!(ws.first().map(|w| w.id.as_str()), Some("session"));
+        let spend = ws.last().unwrap();
+        assert_eq!(spend.id, "spend");
+        assert!((spend.used - 0.01485).abs() < 1e-9, "the amounts divided, not the rounded percent");
+        assert_eq!(spend.resets_at, None);
+        let m = spend.money.as_ref().unwrap();
+        assert_eq!(m.currency, "USD");
+        assert!((m.spent - 2.97).abs() < 1e-9);
+        assert!((m.remaining - 197.03).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_seat_without_spending_draws_no_balance() {
+        let disabled = serde_json::json!({"spend": {"enabled": false,
+            "used": {"amount_minor": 0}, "limit": {"amount_minor": 0}}});
+        assert!(parse_response(&disabled).is_empty());
+        let zero_limit = serde_json::json!({"spend": {"used": {"amount_minor": 0}, "limit": {"amount_minor": 0}}});
+        assert!(parse_response(&zero_limit).is_empty(), "0 of 0 would be an invention");
+        let malformed = serde_json::json!({"spend": "on"});
+        assert!(parse_response(&malformed).is_empty());
     }
 }

@@ -329,10 +329,18 @@ fn windows_from(v: &serde_json::Value) -> Vec<LimitWindow> {
         // Claude's windows — a row is not dropped for lacking one: a percentage with no
         // countdown is still a reading.
         let resets_at = l.get("nextResetTime").and_then(|x| x.as_f64()).map(|ms| ms.max(0.0) as u64);
+        // The window's length from the same unit/number pair, as the Mac reads it: unit 3 counts
+        // hours, unit 6 weeks; the monthly MCP budget and anything else get none
+        let duration = match (unit, number) {
+            (Some(3), Some(n)) if n > 0 => Some(n as u64 * 3600),
+            (Some(6), Some(n)) if n > 0 => Some(n as u64 * 7 * 86400),
+            _ => None,
+        };
         out.push(LimitWindow {
             label: label_for(&id, unit, number),
             used: (pct / 100.0).clamp(0.0, 1.0),
             resets_at,
+            duration,
             id,
             ..Default::default()
         });

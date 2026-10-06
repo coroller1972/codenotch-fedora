@@ -1065,6 +1065,26 @@ fn set_weekly_ring_dashed(app: AppHandle, on: bool) -> bool {
     on
 }
 
+/// Whether the hover card shows each timed window's usage pace.
+#[tauri::command]
+fn get_show_usage_pace(app: AppHandle) -> bool {
+    let st = app.state::<AppState>();
+    let c = st.cfg.lock().unwrap();
+    c.show_usage_pace
+}
+
+#[tauri::command]
+fn set_show_usage_pace(app: AppHandle, on: bool) -> bool {
+    {
+        let st = app.state::<AppState>();
+        let mut c = st.cfg.lock().unwrap();
+        c.show_usage_pace = on;
+        config::save(&c);
+    }
+    let _ = app.emit("show_usage_pace", on);
+    on
+}
+
 /// Where a ring turns from Ample to Watch, as a fraction of the limit.
 #[tauri::command]
 fn get_watch_limit(app: AppHandle) -> f64 {
@@ -1172,7 +1192,9 @@ fn ring_window<'a>(
 ) -> Option<&'a usage::LimitWindow> {
     let by_id = |id: &str| windows.iter().find(|w| w.id == id);
     match provider {
-        "claude" => by_id("session"),
+        // The Mac's headlineID: the session, and only a seat that never reports one (credits
+        // only) falls back to its balance, so a merely missing session still reads as a dash
+        "claude" => by_id("session").or_else(|| windows.iter().find(|w| w.money.is_some())),
         "codex" => by_id("primary"),
         "cursor" => by_id("included").or_else(|| by_id("api")),
         "grok" => by_id("credits").or_else(|| windows.first()),
@@ -1890,6 +1912,8 @@ fn main() {
             set_weekly_ring,
             get_weekly_ring_dashed,
             set_weekly_ring_dashed,
+            get_show_usage_pace,
+            set_show_usage_pace,
             get_color_transition,
             set_color_transition,
             get_watch_limit,
@@ -2305,6 +2329,13 @@ mod tests {
     #[test]
     fn a_missing_declared_window_is_a_dash_not_a_stand_in() {
         assert_eq!(pick("claude", &[win("weekly_all", 0.60)]), None);
+    }
+
+    #[test]
+    fn a_claude_credit_seat_reads_its_balance() {
+        let spend = LimitWindow { money: Some(crate::usage::Money::default()), ..win("spend", 0.4) };
+        assert_eq!(pick("claude", &[spend.clone()]), Some("spend"));
+        assert_eq!(pick("claude", &[win("session", 0.1), spend]), Some("session"), "the session wins wherever there is one");
     }
 
     #[test]

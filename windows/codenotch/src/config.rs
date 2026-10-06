@@ -69,6 +69,11 @@ pub struct Config {
     /// `weekly_ring` is not "off". Off by default: an extra visual change nobody asked for.
     #[serde(default)]
     pub weekly_ring_dashed: bool,
+    /// true = each timed window on the hover card says how far its share used runs ahead of
+    /// (deficit) or behind (reserved) the share of time gone, as the Mac's "Show usage pace".
+    /// Off by default, as there.
+    #[serde(default)]
+    pub show_usage_pace: bool,
     /// How a usage ring changes colour: "hard_step" or "ramp".
     #[serde(default = "default_color_transition")]
     pub color_transition: String,
@@ -286,6 +291,7 @@ impl Default for Config {
             scale: default_scale(),
             weekly_ring: default_weekly_ring(),
             weekly_ring_dashed: false,
+            show_usage_pace: false,
             color_transition: default_color_transition(),
             watch_limit: default_watch_limit(),
             critical_limit: default_critical_limit(),

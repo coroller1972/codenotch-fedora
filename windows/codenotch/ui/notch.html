@@ -135,6 +135,11 @@
   .w-track{height:4px;border-radius:2px;background:var(--bar);margin:6px 0 4px;overflow:hidden}
   .w-fill{height:100%;border-radius:2px}
   .w-used{font-size:11px;color:var(--ink-dim)}
+  .w-pace.deficit{color:var(--watch)}
+  .m-stats{display:flex;gap:10px;margin-top:6px;font-size:11px}
+  .m-stats>div{flex:1;min-width:0}
+  .m-stats .m-label{color:var(--ink-dim)}
+  .m-stats .m-value{font-variant-numeric:tabular-nums;white-space:nowrap}
   .g-head{font-size:12px;font-weight:700;color:var(--ink-2);margin-top:12px}
   .g-box{border:1px solid var(--card-line);border-radius:10px;padding:0 10px 8px;margin-top:6px}
   .c-note{font-size:12px;color:var(--ink-3);line-height:1.5;margin-top:6px}
@@ -393,6 +398,45 @@ function usedCopy(w){
   return ui().usedLeft(used,left);
 }
 
+// The Mac's UsagePace: how far the share used runs ahead of the share of the window gone, in
+// percentage points. Needs the window's length and its reset; anything less is no pace at all.
+// BEGIN TESTABLE PACE SELECTOR
+function paceOf(w,now){
+  if(!w||!(w.duration>0)||!w.resets_at||!(w.used>=0)) return null;
+  const remaining=(w.resets_at-now)/1000;
+  if(!(remaining>0)) return null;
+  // Provider and device clocks can put a fresh reset just beyond one full cycle
+  const elapsed=1-Math.min(remaining/w.duration,1);
+  // Once the allowance is exhausted there is no negative quota to account for
+  return (Math.min(w.used,1)-elapsed)*100;
+}
+function paceFigure(points){
+  const mag=Math.abs(points), rounded=Math.round(mag*10)/10;
+  if(rounded===0&&mag>0) return '<0.1';
+  return String(rounded);
+}
+// END TESTABLE PACE SELECTOR
+let showUsagePace=false;
+function paceHtml(w){
+  if(!showUsagePace) return '';
+  const p=paceOf(w,Date.now()); if(p==null) return '';
+  return ` · <span class="w-pace${p>0?' deficit':''}">${esc(ui().pace(paceFigure(p),p>0))}</span>`;
+}
+// A balance in its own currency's sign, two decimals, as the Mac's MoneyBreakdownView writes it
+function moneyText(currency,value){
+  const c=String(currency||'').toUpperCase();
+  const sym={USD:'$',EUR:'€',CNY:'¥',RMB:'¥',JPY:'¥'}[c]??(c+' ');
+  return sym+(Number(value)||0).toFixed(2);
+}
+function moneyHtml(w){
+  const m=w.money, funded=(m.spent||0)+(m.remaining||0);
+  const stat=(label,value,color)=>`<div><div class="m-label">${esc(textCopy(label))}</div><div class="m-value"${color?` style="color:${color}"`:''}>${esc(moneyText(m.currency,value))}</div></div>`;
+  return `<div class="win">
+    <div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${esc(ui().usedOnly((w.derived?'~':'')+pctText(Math.min(w.used,1))))}</span></div>
+    <div class="w-track"><div class="w-fill" style="width:${(Math.min(w.used,1)*100).toFixed(0)}%;background:${tone(w.used)}"></div></div>
+    <div class="m-stats">${stat('Spent',m.spent,tone(w.used))}${stat('Remaining',m.remaining)}${stat('Funded',funded,'var(--ink-2)')}</div>
+  </div>`;
+}
 let usage={status:'',windows:[],fetched_at:0,note:''};
 let codexSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let cursorSnap={status:'absent',windows:[],fetched_at:0,note:''};
@@ -445,6 +489,7 @@ let uiLang='en';
 // showing half a translation, so adding one is only ever data.
 const TEXT={
   ko:{
+    'Spend limit':'지출 한도','Spent':'사용액','Remaining':'잔여액','Funded':'충전액',
     'Included usage':'포함 사용량',
     'API usage':'API 사용량',
     'On demand':'온디맨드',
@@ -501,6 +546,7 @@ const TEXT={
     'Completions':'코드 완성',
   },
   'pt-BR':{
+    'Spend limit':'Limite de gastos','Spent':'Gasto','Remaining':'Restante','Funded':'Total',
     'Included usage':'Uso incluído',
     'Sign in':'Entrar',
     'Signing in...':'Entrando...',
@@ -560,6 +606,7 @@ const TEXT={
     'Working in':'Em execução em'
   },
   uk:{
+    'Spend limit':'Ліміт витрат','Spent':'Витрачено','Remaining':'Залишок','Funded':'Поповнено',
     'Included usage':'Використання в тарифі',
     'API usage':'Використання API',
     'On demand':'За потребою',
@@ -598,6 +645,7 @@ const TEXT={
     'Working in':'Працює в'
   },
   ru:{
+    'Spend limit':'Лимит расходов','Spent':'Потрачено','Remaining':'Осталось','Funded':'Всего',
     'Included usage':'Включённое использование',
     'Sign in':'Авторизоваться',
     'Signing in...':'Вход…',
@@ -651,6 +699,7 @@ const TEXT={
     'Working in':'Работает в'
   },
   zh:{
+    'Spend limit':'支出上限','Spent':'已花费','Remaining':'剩余','Funded':'已充值',
     'Included usage':'包含用量',
     'API usage':'API 用量',
     'On demand':'按需用量',
@@ -710,6 +759,7 @@ const TEXT={
     'No OpenCode Go subscription on this account':'此账号没有 OpenCode Go 订阅',
   },
   'zh-Hant':{
+    'Spend limit':'支出上限','Spent':'已花費','Remaining':'剩餘','Funded':'已充值',
     'Included usage':'包含用量',
     'API usage':'API 用量',
     'On demand':'按需用量',
@@ -1004,31 +1054,38 @@ const PATTERNS={
 // Grammar differs enough that a format string would not carry it — Russian puts the verb last,
 // Chinese puts it after the time — so each language writes its own short functions.
 const UI={
-  ko:{locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
+  ko:{pace:(v,d)=>d?`${v}% 초과`:`${v}% 여유`,usedOnly:p=>`${p}% 사용`,
+      locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
       resetsAt:t=>`${t}에 재설정`,resetsOn:(d,t)=>`${d} ${t}에 재설정`,resetsDate:d=>`${d}에 재설정`,
       ago:m=>m<60?`${m}분 전`:`${Math.round(m/60)}시간 전`,
       usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
-  'pt-BR':{locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
+  'pt-BR':{pace:(v,d)=>d?`${v}% de déficit`:`${v}% em reserva`,usedOnly:p=>`${p}% usado`,updated:a=>`Atualizado ${a}`,
+      locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
       resetsAt:t=>`Renova às ${t}`,resetsOn:(d,t)=>`Renova ${d} às ${t}`,resetsDate:d=>`Renova ${d}`,
       ago:m=>m<60?`há ${m} min`:`há ${Math.round(m/60)} h`,
       usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,andMore:n=>`e mais ${n}`},
-  en:{locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
+  en:{pace:(v,d)=>d?`${v}% deficit`:`${v}% reserved`,usedOnly:p=>`${p}% used`,
+      locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
       resetsAt:t=>`Resets at ${t}`,resetsOn:(d,t)=>`Resets ${d} ${t}`,resetsDate:d=>`Resets ${d}`,
       ago:m=>m<60?`${m}m ago`:`${Math.round(m/60)}h ago`,
       usedLeft:(used,left)=>`${used}% Used · ${left}% left`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
-  uk:{locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
+  uk:{pace:(v,d)=>d?`${v}% дефіциту`:`${v}% запасу`,usedOnly:p=>`Використано ${p}%`,
+      locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
       resetsAt:t=>`Скидання о ${t}`,resetsOn:(d,t)=>`Скидання: ${d} ${t}`,resetsDate:d=>`Скидання: ${d}`,
       ago:m=>m<60?`${m} хв тому`:`${Math.round(m/60)} год тому`,
       usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
-  ru:{locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
+  ru:{pace:(v,d)=>d?`дефицит ${v}%`:`резерв ${v}%`,usedOnly:p=>`Использовано ${p}%`,
+      locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
       resetsAt:t=>`Сброс в ${t}`,resetsOn:(d,t)=>`Сброс: ${d} ${t}`,resetsDate:d=>`Сброс: ${d}`,
       ago:m=>m<60?`${m} мин назад`:`${Math.round(m/60)} ч назад`,
       usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
-  zh:{locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
+  zh:{pace:(v,d)=>d?`${v}% 透支`:`${v}% 预留`,usedOnly:p=>`已用 ${p}%`,
+      locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分钟前`:`${Math.round(m/60)} 小时前`,
       usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
-  'zh-Hant':{locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
+  'zh-Hant':{pace:(v,d)=>d?`${v}% 透支`:`${v}% 預留`,usedOnly:p=>`已用 ${p}%`,
+      locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分鐘前`:`${Math.round(m/60)} 小時前`,
       usedLeft:(used,left)=>`已用 ${used}% · 剩餘 ${left}%`,andMore:n=>`另有 ${n} 個`,updated:a=>`更新於 ${a}`},
@@ -1136,7 +1193,7 @@ function laneIs(w,limit){
 function headlineOf(snap,id){
   const ws=snap.windows; if(!ws.length) return null;
   const byId=x=>ws.find(w=>w.id===x)||null;
-  if(id==='claude') return byId('session');
+  if(id==='claude') return byId('session')||ws.find(w=>w.money)||null; // a credit seat has no session, ever: its balance is the ring
   if(id==='codex') return byId('primary');
   if(id==='cursor') return byId('included')||byId('api');
   if(id==='grok') return byId('credits')||ws[0];
@@ -1322,7 +1379,9 @@ function renderCard(){
   // p.name is no longer a constant: for a second account it is built from the home
   // directory's slug and the subscriptionType read out of .credentials.json.
   let html=`<div class="c-head">${headIcon}<span class="c-title">${esc(ui().title(p.name))}</span></div>`;
-  if(staleOf(snap)&&snap.fetched_at) html+=`<div class="c-sub">${ui().updated(ago(snap.fetched_at))}</div>`;
+  // The account's plan under the title and, when the reading is old, how old, as the Mac's header has them
+  const sub=[snap.plan?esc(snap.plan):'', staleOf(snap)&&snap.fetched_at?ui().updated(ago(snap.fetched_at)):''].filter(Boolean);
+  if(sub.length) html+=`<div class="c-sub">${sub.join(' · ')}</div>`;
   if(snap.status==='needsAuth'){
     const who={claude:'Sign in to Claude Code to see usage.',cursor:'Sign in to Cursor to see usage.',codex:'Sign in to Codex to see usage.',grok:'Run grok login to see usage.',copilot:'Run gh auth login to see usage.',opencode:'Run opencode auth login to see usage.',gemini:'Sign in to Antigravity to see usage.'}[p.base]||'';
     html+=`<div class="c-note">${textCopy(who)}<br>${esc(textCopy(snap.note||''))}</div>`;
@@ -1337,6 +1396,7 @@ function renderCard(){
         group=w.group||null;
         if(group) html+=`<div class="g-head">${esc(textCopy(group))}</div><div class="g-box">`;
       }
+      if(w.money){ html+=moneyHtml(w); continue; }
       if(w.count!=null){
         html+=`<div class="win"><div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span></div>
           <div class="w-used">${w.count>0?`~${w.count} ${textCopy(w.count===1?'request today':'requests today')}`:textCopy('no requests today')}</div></div>`;
@@ -1345,7 +1405,7 @@ function renderCard(){
       html+=`<div class="win">
         <div class="w-row"><span class="w-label">${esc(textCopy(w.label))}</span><span class="w-reset">${resetCopy(w.resets_at)}</span></div>
         <div class="w-track"><div class="w-fill" style="width:${(Math.min(w.used,1)*100).toFixed(0)}%;background:${tone(w.used)}"></div></div>
-        <div class="w-used">${esc(usedCopy(w))}</div>
+        <div class="w-used">${esc(usedCopy(w))}${paceHtml(w)}</div>
       </div>`;
     }
     if(group) html+=`</div>`;
@@ -2116,6 +2176,8 @@ listen('weekly_ring',e=>{if(typeof e.payload==='string'){weeklyRing=e.payload;re
 invoke('get_color_transition').then(v=>{if(typeof v==='string'){colorTransition=v;renderRing();}}).catch(()=>{});
 listen('color_transition',e=>{if(typeof e.payload==='string'){colorTransition=e.payload;renderRing();}}).catch(()=>{});
 invoke('get_weekly_ring_dashed').then(v=>{if(typeof v==='boolean'){weeklyRingDashed=v;renderRing();}}).catch(()=>{});
+invoke('get_show_usage_pace').then(v=>{if(typeof v==='boolean'){showUsagePace=v;if(card.classList.contains('show')) renderCard();}}).catch(()=>{});
+listen('show_usage_pace',e=>{if(typeof e.payload==='boolean'){showUsagePace=e.payload;if(card.classList.contains('show')) renderCard();}}).catch(()=>{});
 listen('weekly_ring_dashed',e=>{if(typeof e.payload==='boolean'){weeklyRingDashed=e.payload;renderRing();}}).catch(()=>{});
 invoke('get_watch_limit').then(v=>{if(typeof v==='number'){watchLimit=v;renderRing();}}).catch(()=>{});
 listen('watch_limit',e=>{if(typeof e.payload==='number'){watchLimit=e.payload;renderRing();}}).catch(()=>{});
