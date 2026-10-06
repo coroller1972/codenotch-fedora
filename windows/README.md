@@ -49,6 +49,15 @@ what you actually pay, or switches a login to per-token API pricing (daily price
 OpenRouter). Nothing about your usage is sent anywhere. The databases live in
 `~/.local/share/codenotch/costs`.
 
+**Settings → Costs → Open Activity…** opens the Mac's Activity window, which has three views:
+- **Day**: one lane per project over the hours of the day.
+- **Week** or **Month**: an estimated-cost bar per day.
+
+Below the chart, every session is listed under its project with its span, model, turns,
+tokens and estimated cost. A plan-billed session is worth its share of the work in the
+weekly period Codenotch saw it in; a session outside every observed period shows no price
+rather than a borrowed one.
+
 ### Codex quota recovery
 
 The direct usage endpoint remains the first choice. If it fails, Codenotch can

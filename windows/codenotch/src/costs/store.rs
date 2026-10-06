@@ -61,6 +61,22 @@ pub fn weight(input: i64, output: i64, cache_read: i64, cache_write: i64) -> f64
     input as f64 + output as f64 * K_OUTPUT + cache_read as f64 * K_CACHE_READ + cache_write as f64 * K_CACHE_WRITE
 }
 
+/// One session's turns in a range, summed
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SessionAgg {
+    pub session_id: String,
+    pub project: String,
+    pub cwd: String,
+    /// The model of the session's latest turn
+    pub model: String,
+    pub first: i64,
+    pub last: i64,
+    pub turns: i64,
+    pub tokens: i64,
+    pub weight: f64,
+    pub api_cost: Option<f64>,
+}
+
 /// Where a file was read up to
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Cursor {
@@ -110,6 +126,7 @@ impl Store {
                id INTEGER PRIMARY KEY, t0 INTEGER NOT NULL, t1 INTEGER NOT NULL, window TEXT NOT NULL,
                project TEXT NOT NULL, delta_pct REAL NOT NULL);
              CREATE INDEX IF NOT EXISTS ix_attr_window_t1 ON attribution(window, t1);
+             CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT NOT NULL);
              CREATE TABLE IF NOT EXISTS period_boundary(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, window TEXT NOT NULL);
              CREATE INDEX IF NOT EXISTS ix_boundary_window_ts ON period_boundary(window, ts);",
         )
@@ -139,7 +156,8 @@ impl Store {
                    ts = MAX(usage_event.ts, excluded.ts), input = MAX(usage_event.input, excluded.input),
                    output = MAX(usage_event.output, excluded.output),
                    cache_read = MAX(usage_event.cache_read, excluded.cache_read),
-                   cache_write = MAX(usage_event.cache_write, excluded.cache_write)",
+                   cache_write = MAX(usage_event.cache_write, excluded.cache_write),
+                   model = CASE WHEN usage_event.model = 'codex' THEN excluded.model ELSE usage_event.model END",
             )?;
             for e in events {
                 st.execute(params![
@@ -154,6 +172,22 @@ impl Store {
             )?;
         }
         tx.commit()
+    }
+
+    pub fn meta(&self, key: &str) -> Option<String> {
+        self.db.query_row("SELECT value FROM meta WHERE key = ?1", [key], |r| r.get(0)).optional().ok().flatten()
+    }
+
+    pub fn set_meta(&self, key: &str, value: &str) {
+        let _ = self.db.execute(
+            "INSERT INTO meta(key, value) VALUES(?1, ?2) ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        );
+    }
+
+    /// Every file is read again from its start on the next pass; rows, readings and attributions stay
+    pub fn forget_files(&self) {
+        let _ = self.db.execute("DELETE FROM file_cursor", []);
     }
 
     pub fn event_count(&self) -> i64 {
@@ -334,6 +368,64 @@ impl Store {
         out
     }
 
+    /// One aggregate per session for the turns in [from, to], oldest first. `price` prices one turn
+    /// at API rates; a session's API cost is the sum of the turns it could price
+    pub fn sessions(&self, from: i64, to: i64, price: &dyn Fn(&str, [i64; 4]) -> Option<f64>) -> Vec<SessionAgg> {
+        let mut by: HashMap<String, SessionAgg> = HashMap::new();
+        if let Ok(mut st) = self.db.prepare_cached(
+            "SELECT session_id, project, cwd, model, input, output, cache_read, cache_write, ts
+             FROM usage_event WHERE ts >= ?1 AND ts <= ?2 ORDER BY ts",
+        ) {
+            if let Ok(rows) = st.query_map(params![from, to], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    [r.get::<_, i64>(4)?, r.get(5)?, r.get(6)?, r.get(7)?],
+                    r.get::<_, i64>(8)?,
+                ))
+            }) {
+                for (sid, project, cwd, model, t, ts) in rows.flatten() {
+                    let a = by.entry(sid.clone()).or_insert_with(|| SessionAgg {
+                        session_id: sid,
+                        project,
+                        cwd,
+                        first: ts,
+                        last: ts,
+                        ..Default::default()
+                    });
+                    a.weight += weight(t[0], t[1], t[2], t[3]);
+                    a.tokens += t.iter().sum::<i64>();
+                    a.turns += 1;
+                    a.first = a.first.min(ts);
+                    a.last = a.last.max(ts);
+                    if let Some(c) = price(&model, t) {
+                        *a.api_cost.get_or_insert(0.0) += c;
+                    }
+                    a.model = model; // the latest turn's
+                }
+            }
+        }
+        let mut out: Vec<SessionAgg> = by.into_values().collect();
+        out.sort_by_key(|a| (a.first, a.session_id.clone()));
+        out
+    }
+
+    /// The window's periods seen so far, oldest first: (start, end, highest reading in it). A
+    /// period is known by the reset time its readings carried, and starts one window before it
+    pub fn periods(&self, w: Window) -> Vec<(i64, i64, f64)> {
+        let mut out = Vec::new();
+        if let Ok(mut st) = self.db.prepare_cached(
+            "SELECT resets_at, MAX(pct) FROM quota_sample WHERE window=?1 AND resets_at IS NOT NULL GROUP BY resets_at ORDER BY resets_at",
+        ) {
+            if let Ok(rows) = st.query_map([w.key()], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?))) {
+                out.extend(rows.flatten().map(|(end, pct)| (end - w.secs(), end, pct)));
+            }
+        }
+        out
+    }
+
     /// Tokens per local calendar day ("YYYY-MM-DD", oldest first)
     pub fn daily_tokens(&self) -> Vec<(String, i64)> {
         let mut out = Vec::new();
@@ -436,5 +528,29 @@ mod tests {
         s.record_sample(Window::Weekly, 50.0, None, 100);
         s.record_sample(Window::Weekly, 50.0, None, 90);
         assert_eq!(s.last_sample(Window::Weekly).map(|x| x.1), Some(10.0));
+    }
+
+    #[test]
+    fn sessions_sum_their_turns_and_periods_follow_the_resets() {
+        let mut s = Store::memory();
+        let mut a = ev("a", 100, "/p", 10, 1);
+        a.session_id = "one".into();
+        let mut b = ev("b", 160, "/p", 20, 2);
+        b.session_id = "one".into();
+        b.model = "claude-opus-5".into();
+        let mut c = ev("c", 130, "/q", 5, 0);
+        c.session_id = "two".into();
+        commit(&mut s, &[a, b, c]);
+        let price = |m: &str, t: [i64; 4]| (m == "claude-opus-5").then_some(t[0] as f64);
+        let list = s.sessions(0, 1000, &price);
+        assert_eq!(list.iter().map(|x| x.session_id.as_str()).collect::<Vec<_>>(), ["one", "two"]);
+        assert_eq!((list[0].first, list[0].last, list[0].turns, list[0].tokens), (100, 160, 2, 33));
+        assert_eq!(list[0].model, "claude-opus-5", "the latest turn's model");
+        assert_eq!(list[0].api_cost, Some(20.0), "only the turns that could be priced");
+        assert_eq!(list[1].api_cost, None);
+        s.record_sample(Window::Weekly, 5.0, Some(700_000), 100);
+        s.record_sample(Window::Weekly, 9.0, Some(700_000), 200);
+        s.record_sample(Window::Weekly, 1.0, Some(1_300_000), 300);
+        assert_eq!(s.periods(Window::Weekly), vec![(700_000 - 604_800, 700_000, 9.0), (1_300_000 - 604_800, 1_300_000, 1.0)]);
     }
 }

@@ -8,6 +8,7 @@
 //! One SQLite database per account (Claude's, each `~/.claude-<slug>`, and Codex's). A background
 //! thread indexes the transcripts and records every new usage reading; the card asks for a view.
 
+pub mod activity;
 mod indexer;
 mod pricing;
 mod store;
