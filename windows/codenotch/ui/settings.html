@@ -1777,6 +1777,7 @@ function boot(){
     autostart.refresh(),
     adaptivePill.refresh(),
     weeklyDashed.refresh(),
+    usagePace.refresh(),
     hooks.refresh()
   ];
   try { window.__TAURI__.event.listen('glyphs', e => { if(e.payload){ glyphs = e.payload; renderAccounts(); } }); } catch(e) { /* the letters stay */ }

@@ -2176,8 +2176,14 @@ listen('weekly_ring',e=>{if(typeof e.payload==='string'){weeklyRing=e.payload;re
 invoke('get_color_transition').then(v=>{if(typeof v==='string'){colorTransition=v;renderRing();}}).catch(()=>{});
 listen('color_transition',e=>{if(typeof e.payload==='string'){colorTransition=e.payload;renderRing();}}).catch(()=>{});
 invoke('get_weekly_ring_dashed').then(v=>{if(typeof v==='boolean'){weeklyRingDashed=v;renderRing();}}).catch(()=>{});
-invoke('get_show_usage_pace').then(v=>{if(typeof v==='boolean'){showUsagePace=v;if(card.classList.contains('show')) renderCard();}}).catch(()=>{});
-listen('show_usage_pace',e=>{if(typeof e.payload==='boolean'){showUsagePace=e.payload;if(card.classList.contains('show')) renderCard();}}).catch(()=>{});
+function setUsagePace(on,from){
+  if(typeof on!=='boolean') return;
+  if(on!==showUsagePace) jslog(`usage pace ${on?'on':'off'} (${from})`);
+  showUsagePace=on;
+  if(card.classList.contains('show')) renderCard();
+}
+invoke('get_show_usage_pace').then(v=>setUsagePace(v,'startup')).catch(e=>jslog('get_show_usage_pace failed: '+e));
+listen('show_usage_pace',e=>setUsagePace(e.payload,'settings')).catch(e=>jslog('listen show_usage_pace failed: '+e));
 listen('weekly_ring_dashed',e=>{if(typeof e.payload==='boolean'){weeklyRingDashed=e.payload;renderRing();}}).catch(()=>{});
 invoke('get_watch_limit').then(v=>{if(typeof v==='number'){watchLimit=v;renderRing();}}).catch(()=>{});
 listen('watch_limit',e=>{if(typeof e.payload==='number'){watchLimit=e.payload;renderRing();}}).catch(()=>{});
