@@ -158,16 +158,22 @@ fn parse_iso(v: Option<&serde_json::Value>) -> Option<u64> {
 /// usage-summary → (windows, note). When there are no windows the note says why (Unlimited / free plan without an allowance)
 pub fn parse_summary(v: &serde_json::Value) -> (Vec<LimitWindow>, String) {
     let resets_at = parse_iso(v.get("billingCycleEnd"));
+    // The billing cycle's length, as the Mac reads it: end minus start, for the usage pace
+    let duration = parse_iso(v.get("billingCycleStart"))
+        .zip(resets_at)
+        .and_then(|(start, end)| end.checked_sub(start))
+        .map(|ms| ms / 1000)
+        .filter(|s| *s > 0);
     let usage = v.get("individualUsage").cloned().unwrap_or(serde_json::Value::Null);
     let plan = usage.get("plan").cloned().unwrap_or(serde_json::Value::Null);
     let mut out = Vec::new();
     // Headline = the dashboard number; 0 is a reading too
     if let Some(total) = pct(plan.get("totalPercentUsed")) {
-        out.push(LimitWindow { id: "included".into(), label: "Included usage".into(), used: total, resets_at, ..Default::default() });
+        out.push(LimitWindow { id: "included".into(), label: "Included usage".into(), used: total, resets_at, duration, ..Default::default() });
     }
     if let Some(api) = pct(plan.get("apiPercentUsed")) {
         if api > 0.0 {
-            out.push(LimitWindow { id: "api".into(), label: "API usage".into(), used: api, resets_at, ..Default::default() });
+            out.push(LimitWindow { id: "api".into(), label: "API usage".into(), used: api, resets_at, duration, ..Default::default() });
         }
     }
     if let Some(od) = usage.get("onDemand") {
@@ -180,7 +186,9 @@ pub fn parse_summary(v: &serde_json::Value) -> (Vec<LimitWindow>, String) {
                     id: "on_demand".into(),
                     label: "On demand".into(),
                     used: (u / limit).clamp(0.0, 1.0),
-                    resets_at, ..Default::default()
+                    resets_at,
+                    duration,
+                    ..Default::default()
                 });
             }
         }
@@ -212,14 +220,6 @@ fn fetch_once(cookie: &str) -> Result<serde_json::Value, FetchErr> {
     }
 }
 
-fn cap(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-        None => String::new(),
-    }
-}
-
 fn read_once(prev: &UsageSnapshot) -> UsageSnapshot {
     let mut snap = prev.clone();
     let Some(creds) = read_credentials() else {
@@ -238,11 +238,11 @@ fn read_once(prev: &UsageSnapshot) -> UsageSnapshot {
             } else {
                 snap.status = "ok".into();
                 snap.windows = windows;
-                snap.note = match (&creds.plan, v.get("membershipType").and_then(|x| x.as_str())) {
-                    (_, Some(m)) => format!("{} · via Cursor", cap(m)),
-                    (Some(p), None) => format!("{} · via Cursor", cap(p)),
-                    _ => String::new(),
-                };
+                // The plan goes under the card's title, as on the Mac; a live reading needs no note
+                snap.note.clear();
+                snap.plan = crate::usage::plan_name(
+                    v.get("membershipType").and_then(|x| x.as_str()).or(creds.plan.as_deref()),
+                );
             }
         }
         Err(FetchErr::NeedsAuth) => {

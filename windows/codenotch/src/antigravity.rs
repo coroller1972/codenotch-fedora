@@ -301,6 +301,7 @@ pub fn windows_from_bridge(v: &serde_json::Value) -> Vec<LimitWindow> {
             out.push(LimitWindow {
                 label: lane_name(&id).or(gname).or(bname).unwrap_or("Usage").to_string(),
                 group: gname.map(String::from),
+                duration: lane_duration(&id),
                 id,
                 used: (1.0 - rem).clamp(0.0, 1.0),
                 resets_at: parse_iso(b.get("resetTime")),
@@ -322,6 +323,14 @@ pub(crate) fn lane_name(id: &str) -> Option<&'static str> {
         Some("5-hour Limit")
     } else {
         None
+    }
+}
+
+/// A lane's length from its name, as the Mac's quota parser has it: a week or five hours
+pub(crate) fn lane_duration(id: &str) -> Option<u64> {
+    match lane_name(id)? {
+        "Weekly Limit" => Some(7 * 86400),
+        _ => Some(5 * 3600),
     }
 }
 

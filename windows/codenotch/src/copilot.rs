@@ -315,7 +315,21 @@ pub fn label(id: &str) -> String {
     }
 }
 
-/// The plan name, for the card's account line
+/// The calendar month a quota resetting at `reset` covers, in seconds — upstream's
+/// `monthlyDuration(endingAt:)`. Only a reset at the very start of a UTC month says it is a
+/// monthly quota; any other instant is a cycle whose start we would be guessing, so it has none
+fn monthly_duration(reset: Option<u64>) -> Option<u64> {
+    use chrono::{Datelike, TimeZone, Timelike};
+    let end = chrono::Utc.timestamp_millis_opt(reset? as i64).single()?;
+    if end.day() != 1 || end.hour() != 0 || end.minute() != 0 || end.second() != 0 {
+        return None;
+    }
+    let (y, m) = if end.month() == 1 { (end.year() - 1, 12) } else { (end.year(), end.month() - 1) };
+    let start = chrono::Utc.with_ymd_and_hms(y, m, 1, 0, 0, 0).single()?;
+    u64::try_from((end - start).num_seconds()).ok()
+}
+
+/// The plan name, for the card's subtitle
 pub fn plan(v: &serde_json::Value) -> Option<String> {
     non_empty(v.get("copilot_plan").or_else(|| v.get("plan")).and_then(|x| x.as_str()).map(|s| s.to_string()))
 }
@@ -339,6 +353,7 @@ fn window(id: &str, quota: &serde_json::Value, root: &serde_json::Value) -> Opti
         label: label(id),
         used: (consumed / entitlement).clamp(0.0, 1.0),
         resets_at,
+        duration: monthly_duration(resets_at),
         ..Default::default()
     })
 }
@@ -405,9 +420,8 @@ fn read_once(prev: &UsageSnapshot) -> UsageSnapshot {
                 if let Some(u) = creds.username {
                     parts.push(u);
                 }
-                if let Some(p) = plan(&v) {
-                    parts.push(p);
-                }
+                // The plan goes under the card's title, as on the Mac
+                snap.plan = crate::usage::plan_name(plan(&v).as_deref());
                 parts.push(format!("via {}", creds.source));
                 snap.note = parts.join(" · ");
             }
@@ -611,5 +625,15 @@ mod tests {
     #[test]
     fn quoted_values_are_unquoted() {
         assert_eq!(parse_hosts("github.com:\n  user: \"octocat\"\n  oauth_token: 'tok'\n"), (Some("octocat".into()), Some("tok".into())));
+    }
+
+    #[test]
+    fn a_month_start_reset_spans_the_month_before_it() {
+        let ms = |s: &str| chrono::DateTime::parse_from_rfc3339(s).unwrap().timestamp_millis() as u64;
+        assert_eq!(monthly_duration(Some(ms("2026-10-01T00:00:00Z"))), Some(30 * 86400), "September");
+        assert_eq!(monthly_duration(Some(ms("2026-03-01T00:00:00Z"))), Some(28 * 86400), "February");
+        assert_eq!(monthly_duration(Some(ms("2026-01-01T00:00:00Z"))), Some(31 * 86400), "December, across the year");
+        assert_eq!(monthly_duration(Some(ms("2026-10-15T00:00:00Z"))), None, "not a month boundary: no guess");
+        assert_eq!(monthly_duration(None), None);
     }
 }

@@ -179,6 +179,8 @@
         </div>
         <div class="sec">Usage Limits</div>
         <div class="group">
+          <div class="item"><span>Show usage pace</span><button class="switch" id="sw-pace" role="switch" aria-checked="false" aria-label="Show usage pace"></button></div>
+          <div class="item cap" id="cap-pace">Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.</div>
           <div class="item"><span>Colour transition</span><span class="seg" id="seg-transition"><button data-v="hard_step">Hard step</button><button data-v="ramp">Colour ramp</button></span></div>
           <div class="item cap" id="cap-transition" data-dynamic></div>
           <div class="item slider"><span>Watch limit</span><span class="value" id="val-watch" data-dynamic>50%</span><input type="range" class="range" id="range-watch" min="1" max="99" step="1" aria-label="Watch limit"></div>
@@ -320,6 +322,8 @@ const PT_BR_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Mais fácil de ler de relance, e mais difícil de ignorar.',
   'Weekly ring':'Anel semanal',
   'Dashed weekly ring':'Anel semanal tracejado',
+  'Show usage pace':'Exibir ritmo de uso',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Compara cada cota com o tempo restante até a renovação e mostra quando o uso está em déficit ou em reserva.',
   'Off':'Desativado',
   'Inside':'Dentro',
   'Outside':'Fora',
@@ -415,6 +419,8 @@ const RU_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легче читать одним взглядом, но сложнее не заметить.',
   'Weekly ring':'Недельное кольцо', 'Off':'Выкл.', 'Inside':'Внутри', 'Outside':'Снаружи',
   'Dashed weekly ring':'Пунктирное недельное кольцо',
+  'Show usage pace':'Показывать темп использования',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Сравнивает каждый лимит по времени с оставшимся до сброса временем и показывает дефицит или запас квоты.',
   'One ring per provider, showing the headline limit. The weekly allowance stays in the hover card.':'Одно кольцо на провайдера с основным лимитом. Недельная квота остаётся в карточке при наведении.',
   'A thinner ring for the weekly limit, drawn inside the main one. It shares the gap with the working indicator.':'Тонкое кольцо недельного лимита внутри основного. Оно делит зазор с индикатором работы.',
   'A thinner ring for the weekly limit, drawn around the main one, in the margin between the ring and the notch edge.':'Тонкое кольцо недельного лимита вокруг основного, в промежутке между кольцом и краем панели.',
@@ -507,6 +513,8 @@ const ZH_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好读，也更难忽视。',
   'Weekly ring':'每周圆环',
   'Dashed weekly ring':'虚线每周圆环',
+  'Show usage pace':'显示用量节奏',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'把每段有时限的额度与距离重置的时间比较，显示透支还是留有余量。',
   'Off':'关闭',
   'Inside':'内侧',
   'Outside':'外侧',
@@ -616,6 +624,8 @@ const ZH_HANT_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'一眼更好讀，也更難忽視。',
   'Weekly ring':'每週圓環',
   'Dashed weekly ring':'虛線每週圓環',
+  'Show usage pace':'顯示用量節奏',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'把每段有時限的額度與距離重置的時間比較，顯示透支還是留有餘量。',
   'Off':'關閉',
   'Inside':'內側',
   'Outside':'外側',
@@ -725,6 +735,8 @@ const JA_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'ひと目で読みやすく、無視しにくいサイズ。',
   'Weekly ring':'週間のリング',
   'Dashed weekly ring':'週間のリングを破線にする',
+  'Show usage pace':'使用ペースを表示',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'時間で区切られた枠ごとに、リセットまでの残り時間と比べて、超過分か余裕分かを示します。',
   'Off':'オフ',
   'Inside':'内側',
   'Outside':'外側',
@@ -821,6 +833,8 @@ const KO_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'한눈에 읽기 쉽고 눈에 잘 띕니다.',
   'Weekly ring':'주간 링',
   'Dashed weekly ring':'주간 링을 점선으로 표시',
+  'Show usage pace':'사용 속도 표시',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'기간별 할당량을 재설정까지 남은 시간과 비교해 사용량이 기준보다 초과했는지 여유가 있는지 표시합니다.',
   'Off':'끄기',
   'Inside':'안쪽',
   'Outside':'바깥쪽',
@@ -932,6 +946,8 @@ const UK_STATIC = {
   'Easier to read at a glance, and harder to ignore.':'Легше прочитати одним поглядом і важче не помітити.',
   'Weekly ring':'Тижневе кільце',
   'Dashed weekly ring':'Пунктирне тижневе кільце',
+  'Show usage pace':'Показувати темп використання',
+  'Compares each timed allowance with the time left until reset, showing quota in deficit or held in reserve.':'Порівнює кожен часовий ліміт із часом, що лишився до скидання, і показує, де ліміт у дефіциті, а де в запасі.',
   'Off':'Вимк.',
   'Inside':'Усередині',
   'Outside':'Ззовні',
@@ -1212,6 +1228,8 @@ const adaptivePill = remote('get_adaptive_pill', 'set_adaptive_pill', 'Adaptive 
 document.getElementById('sw-adaptive').addEventListener('click', () => adaptivePill.toggle());
 const weeklyDashed = remote('get_weekly_ring_dashed', 'set_weekly_ring_dashed', 'Dashed weekly ring', () => drawSwitch(document.getElementById('sw-weekly-dashed'), weeklyDashed));
 document.getElementById('sw-weekly-dashed').addEventListener('click', () => weeklyDashed.toggle());
+const usagePace = remote('get_show_usage_pace', 'set_show_usage_pace', 'Show usage pace', () => drawSwitch(document.getElementById('sw-pace'), usagePace));
+document.getElementById('sw-pace').addEventListener('click', () => usagePace.toggle());
 
 /* ---- Accounts: which providers get a ring --------------------------------
    Stored as {provider} slots, and an EMPTY list means every provider, so a provider added in a
@@ -1723,6 +1741,7 @@ function renderAll(){
   drawSwitch(document.getElementById('sw-autostart'), autostart);
   drawSwitch(document.getElementById('sw-adaptive'), adaptivePill);
   drawSwitch(document.getElementById('sw-weekly-dashed'), weeklyDashed);
+  drawSwitch(document.getElementById('sw-pace'), usagePace);
   if(updState) renderUpdate(updState);
   document.getElementById('title').textContent = ui(TITLES[curTab], TITLES[curTab]);
 }
@@ -1758,6 +1777,7 @@ function boot(){
     autostart.refresh(),
     adaptivePill.refresh(),
     weeklyDashed.refresh(),
+    usagePace.refresh(),
     hooks.refresh()
   ];
   try { window.__TAURI__.event.listen('glyphs', e => { if(e.payload){ glyphs = e.payload; renderAccounts(); } }); } catch(e) { /* the letters stay */ }

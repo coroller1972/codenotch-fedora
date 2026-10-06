@@ -233,6 +233,12 @@ fn fetch_usage(cred: &Credential) -> Result<serde_json::Value, LiveErr> {
 }
 
 /// Upstream's label rule: Codex names windows only by length, and "5h limit" says more than "primary"
+/// A window's length in whole seconds, from whatever unit the source states it in; nothing for a
+/// missing or nonsensical one, so the card shows no pace rather than one against a made-up length
+fn secs(value: Option<f64>, per_unit: f64) -> Option<u64> {
+    value.map(|v| v * per_unit).filter(|s| s.is_finite() && *s > 0.0).map(|s| s.round() as u64)
+}
+
 fn label_for(window_minutes: Option<f64>, id: &str) -> String {
     match window_minutes {
         Some(m) if m > 0.0 => {
@@ -296,6 +302,7 @@ fn window_from(
         label: label_for(num(w.get("limit_window_seconds")).map(|s| s / 60.0), fallback),
         used: (pct / 100.0).clamp(0.0, 1.0),
         resets_at: reset_at_ms(w, now, "reset_at", "reset_after_seconds"),
+        duration: secs(num(w.get("limit_window_seconds")), 1.0),
         group: group.map(str::to_string),
         ..Default::default()
     })
@@ -504,6 +511,7 @@ pub fn snapshot_from_rollout(text: &str) -> Option<(Vec<LimitWindow>, Option<u64
                 label: label_for(num(w.get("window_minutes")), id),
                 used: (pct / 100.0).clamp(0.0, 1.0),
                 resets_at: reset_at_ms(w, now, "resets_at", "resets_in_seconds"),
+                duration: secs(num(w.get("window_minutes")), 60.0),
                 ..Default::default()
             });
         }
@@ -591,6 +599,7 @@ fn app_server_snapshot(result: &serde_json::Value) -> Option<UsageSnapshot> {
             label: label_for(w.get("windowDurationMins").and_then(|x| x.as_f64()), id),
             used: (used / 100.0).clamp(0.0, 1.0),
             resets_at: w.get("resetsAt").and_then(|x| x.as_u64()).map(|s| s.saturating_mul(1000)),
+            duration: secs(w.get("windowDurationMins").and_then(|x| x.as_f64()), 60.0),
             ..Default::default()
         });
     }
@@ -673,7 +682,8 @@ fn read_once() -> UsageSnapshot {
                         snap.status = "ok".into();
                         snap.windows = windows;
                         snap.fetched_at = now_ms();
-                        snap.note = plan.map(|p| format!("{} · via Codex", cap(&p))).unwrap_or_default();
+                        // The plan goes under the card's title, as on the Mac; a live reading needs no note
+                        snap.plan = crate::usage::plan_name(plan.as_deref());
                         return snap;
                     }
                     let keys: Vec<String> = v.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
@@ -723,10 +733,8 @@ fn read_once() -> UsageSnapshot {
             snap.status = if fresh { "ok" } else { "stale" }.into();
             snap.windows = windows;
             snap.fetched_at = rec; // the recorded time is what counts; the UI shows Updated N ago from it
-            snap.note = match plan {
-                Some(p) => format!("{} · from last Codex run", cap(&p)),
-                None => "from last Codex run".into(),
-            };
+            snap.plan = crate::usage::plan_name(plan.as_deref());
+            snap.note = "from last Codex run".into();
             if let Some(n) = live_note {
                 snap.note = format!("{n} · {}", snap.note);
             }
@@ -748,14 +756,6 @@ fn read_once() -> UsageSnapshot {
         }
     }
     snap
-}
-
-fn cap(s: &str) -> String {
-    let mut c = s.chars();
-    match c.next() {
-        Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
-        None => String::new(),
-    }
 }
 
 fn broadcast(app: &AppHandle, snap: UsageSnapshot) {
