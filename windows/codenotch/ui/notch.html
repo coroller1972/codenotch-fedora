@@ -164,6 +164,14 @@
   /* A row is one line however long its name: the name gives way, the state beside it never does */
   .s-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;overflow-wrap:normal}
   .s-detail{flex:none;color:#808080;white-space:nowrap}
+  /* Claude's sessions, the Mac's SessionRow: name and state on one line, what it is on and for how long under it */
+  .s-item{padding:4px 6px;margin:0 -6px;border-radius:8px;cursor:pointer}
+  .s-item:hover{background:var(--card-line)}
+  .s-item+.s-item{margin-top:2px}
+  .s-item .s-row{font-size:12px;color:var(--ink-2)}
+  .s-state{flex:none;white-space:nowrap;font-size:11px}
+  .s-sub{display:flex;gap:6px;font-size:11px;color:var(--ink-dim);padding-left:12px}
+  .s-sub .s-detail{color:var(--ink-dim)}
   .s-dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto}
   .s-more{font-size:11px;color:var(--ink-dim);padding:2px 0}
 
@@ -1189,6 +1197,7 @@ const PATTERNS={
 // Chinese puts it after the time — so each language writes its own short functions.
 const UI={
   ko:{costTabs:{today:'오늘',week:'주',month:'월'},elsewhere:'다른 곳',otherN:n=>`기타 (${n})`,
+      stateWord:{running:'작업 중',attention:'대기 중',done:'완료',idle:'유휴 상태'},elapsed:(h,m)=>h<0?'방금':h===0?`${m}분`:m===0?`${h}시간`:`${h}시간 ${m}분`,focusFailed:'이 세션의 창을 앞으로 가져올 수 없습니다',
       unusedTitle:'미사용 리셋',unused:n=>n===1?'미사용 리셋 1개':`미사용 리셋 ${n}개`,expires:(d,next)=>next?`다음 만료 ${d}`:`${d}에 만료`,
       pace:(v,d)=>d?`${v}% 초과`:`${v}% 여유`,usedOnly:p=>`${p}% 사용`,
       locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
@@ -1196,6 +1205,7 @@ const UI={
       ago:m=>m<60?`${m}분 전`:`${Math.round(m/60)}시간 전`,
       usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
   'pt-BR':{costTabs:{today:'Hoje',week:'Semana',month:'Mês'},elsewhere:'Outros',otherN:n=>`Outros (${n})`,
+      stateWord:{running:'trabalhando',attention:'aguardando',done:'concluído',idle:'ocioso'},elapsed:(h,m)=>h<0?'agora mesmo':h===0?`${m} min`:m===0?`${h} h`:`${h} h ${m} min`,focusFailed:'Não foi possível trazer a janela desta sessão para a frente',
       unusedTitle:'Reinicializações não usadas',unused:n=>n===1?'1 reinicialização não usada':`${n} reinicializações não usadas`,expires:(d,next)=>next?`A próxima expira ${d}`:`Expira ${d}`,
       pace:(v,d)=>d?`${v}% de déficit`:`${v}% em reserva`,usedOnly:p=>`${p}% usado`,updated:a=>`Atualizado ${a}`,
       locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
@@ -1203,6 +1213,7 @@ const UI={
       ago:m=>m<60?`há ${m} min`:`há ${Math.round(m/60)} h`,
       usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,andMore:n=>`e mais ${n}`},
   en:{costTabs:{today:'Today',week:'Week',month:'Month'},elsewhere:'Elsewhere',otherN:n=>`Other (${n})`,
+      stateWord:{running:'working',attention:'waiting',done:'complete',idle:'idle'},elapsed:(h,m)=>h<0?'just now':h===0?`${m} min`:m===0?`${h} hr`:`${h} hr ${m} min`,focusFailed:"Couldn't bring this session's window forward",
       unusedTitle:'Unused resets',unused:n=>n===1?'1 unused reset':`${n} unused resets`,expires:(d,next)=>next?`Next expires ${d}`:`Expires ${d}`,
       pace:(v,d)=>d?`${v}% deficit`:`${v}% reserved`,usedOnly:p=>`${p}% used`,
       locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
@@ -1210,6 +1221,7 @@ const UI={
       ago:m=>m<60?`${m}m ago`:`${Math.round(m/60)}h ago`,
       usedLeft:(used,left)=>`${used}% Used · ${left}% left`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
   uk:{costTabs:{today:'Сьогодні',week:'Тиждень',month:'Місяць'},elsewhere:'Деінде',otherN:n=>`Інші (${n})`,
+      stateWord:{running:'працює',attention:'очікує',done:'завершено',idle:'простій'},elapsed:(h,m)=>h<0?'щойно':h===0?`${m} хв`:m===0?`${h} год`:`${h} год ${m} хв`,focusFailed:'Не вдалося вивести вікно цього сеансу на передній план',
       unusedTitle:'Невикористані скидання',unused:n=>n===1?'1 невикористане скидання':`${n} невикористаних скидань`,expires:(d,next)=>next?`Наступне спливає ${d}`:`Спливає ${d}`,
       pace:(v,d)=>d?`${v}% дефіциту`:`${v}% запасу`,usedOnly:p=>`Використано ${p}%`,
       locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
@@ -1217,6 +1229,7 @@ const UI={
       ago:m=>m<60?`${m} хв тому`:`${Math.round(m/60)} год тому`,
       usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
   ru:{costTabs:{today:'Сегодня',week:'Неделя',month:'Месяц'},elsewhere:'В другом месте',otherN:n=>`Другие (${n})`,
+      stateWord:{running:'работает',attention:'ожидает',done:'завершено',idle:'бездействует'},elapsed:(h,m)=>h<0?'только что':h===0?`${m} мин`:m===0?`${h} ч`:`${h} ч ${m} мин`,focusFailed:'Не удалось вывести окно этого сеанса на передний план',
       unusedTitle:'Неиспользованные сбросы',unused:n=>n===1?'1 неиспользованный сброс':`${n} неиспользованных сбросов`,expires:(d,next)=>next?`Следующий истекает ${d}`:`Истекает ${d}`,
       pace:(v,d)=>d?`дефицит ${v}%`:`резерв ${v}%`,usedOnly:p=>`Использовано ${p}%`,
       locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
@@ -1224,6 +1237,7 @@ const UI={
       ago:m=>m<60?`${m} мин назад`:`${Math.round(m/60)} ч назад`,
       usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
   zh:{costTabs:{today:'今日',week:'周',month:'月'},elsewhere:'其他地方',otherN:n=>`其他（${n}）`,
+      stateWord:{running:'工作中',attention:'等待中',done:'已完成',idle:'空闲'},elapsed:(h,m)=>h<0?'刚刚':h===0?`${m} 分钟`:m===0?`${h} 小时`:`${h} 小时 ${m} 分钟`,focusFailed:'无法将此会话的窗口切换到前台',
       unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
       pace:(v,d)=>d?`${v}% 透支`:`${v}% 预留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
@@ -1231,6 +1245,7 @@ const UI={
       ago:m=>m<60?`${m} 分钟前`:`${Math.round(m/60)} 小时前`,
       usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
   'zh-Hant':{costTabs:{today:'今日',week:'週',month:'月'},elsewhere:'其他地方',otherN:n=>`其他（${n}）`,
+      stateWord:{running:'工作中',attention:'等待中',done:'已完成',idle:'空閒'},elapsed:(h,m)=>h<0?'剛剛':h===0?`${m} 分鐘`:m===0?`${h} 小時`:`${h} 小時 ${m} 分鐘`,focusFailed:'無法將此工作階段的視窗切換到前景',
       unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
       pace:(v,d)=>d?`${v}% 透支`:`${v}% 預留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
@@ -1491,6 +1506,41 @@ function ago(ms){
 }
 
 const STATE_DOT={running:INK,attention:WATCH,done:AMPLE,idle:TRACK};
+// The Mac's SessionList: waiting first, then working, complete, idle, newest first within each, so
+// what the row cap hides is what matters least; and ElapsedCopy's "how long has it been like this"
+// BEGIN TESTABLE SESSIONS SELECTOR
+const SESSION_RANK={attention:0,running:1,done:2,idle:3};
+function orderSessions(list){
+  return [...list].sort((a,b)=>((SESSION_RANK[a.state]??4)-(SESSION_RANK[b.state]??4))||(sinceOf(b)-sinceOf(a)));
+}
+// When the current state began: a finished run's clock stops at its end
+function sinceOf(s){ return s.state==='done'?(s.started||0)+(s.total||0):(s.started||0); }
+// [hours, minutes] since then, or [-1,0] under 45 s ("just now")
+function elapsedParts(since,now){
+  const secs=Math.max(0,(now-since)/1000);
+  if(secs<45) return [-1,0];
+  const minutes=Math.max(1,Math.round(secs/60));
+  return minutes<60?[0,minutes]:[Math.floor(minutes/60),minutes%60];
+}
+// While it waits, what it waits on; while it works, the step it is on; otherwise what was asked
+function sessionDetail(s){
+  if(s.state==='attention'&&s.attn) return s.attn;
+  if(s.state==='running'&&s.last) return s.last;
+  return s.prompt||s.last||'';
+}
+// END TESTABLE SESSIONS SELECTOR
+function sessionRowHtml(s,now){
+  const color=STATE_DOT[s.state]||TRACK, word=(ui().stateWord||UI.en.stateWord)[s.state]||s.state;
+  const [h,m]=elapsedParts(sinceOf(s),now);
+  return `<div class="s-item" role="button" tabindex="0" data-id="${esc(s.id)}">
+    <div class="s-row"><span class="s-dot" style="background:${color}"></span><span class="s-name">${esc(s.title)}</span><span class="s-state" style="color:${s.state==='idle'?'var(--ink-dim)':color}">${esc(word)}</span></div>
+    <div class="s-sub"><span class="s-name">${esc(sessionDetail(s))}</span><span class="s-detail">${esc(ui().elapsed(h,m))}</span></div>
+  </div>`;
+}
+function focusSession(id){
+  invoke('focus_session',{id}).then(ok=>{ if(ok) hideCard(); else notice(ui().focusFailed); })
+    .catch(e=>notice('focus_session failed: '+e));
+}
 // The card is clipped, not scrolled, so rows past this would push its title off the top; the rest are counted, as on the Mac
 const SESSION_ROWS=5;
 function moreRow(n){ return n>0?`<div class="s-more">${ui().andMore(n)}</div>`:''; }
@@ -1565,13 +1615,11 @@ function renderCard(){
     if(tokens) html+=tokenUsageHtml(tokens);
   }
   if(offersClaudeSignIn(p)) html+=claudeAuthHtml(claudeAuth,claudeActionMessage);
-  if(p.base==='claude'){ // live sessions (a full list with jump-to-session is a follow-up)
-    const act=stateSnap.sessions.filter(s=>s.state!=='idle');
+  if(p.base==='claude'){ // every session the hooks know of; a click brings its terminal forward
+    const act=orderSessions(stateSnap.sessions||[]), now=Date.now();
     if(act.length){
       html+=`<div class="c-sessions">`;
-      for(const s of act.slice(0,SESSION_ROWS)){
-        html+=`<div class="s-row"><span class="s-dot" style="background:${STATE_DOT[s.state]||'#666'}"></span><span class="s-name">${esc(s.title)}</span></div>`;
-      }
+      for(const s of act.slice(0,SESSION_ROWS)) html+=sessionRowHtml(s,now);
       html+=moreRow(act.length-SESSION_ROWS)+`</div>`;
     }
   }else{ // other providers: detected activity rows (Cursor reports state; Codex/Antigravity are inferred from recent writes)
@@ -1590,6 +1638,10 @@ function renderCard(){
   c.innerHTML=html;
   for(const b of c.querySelectorAll('.k-tabs button[data-range]')){
     b.onclick=e=>{ e.stopPropagation(); costRange=b.dataset.range; try{ localStorage.setItem('costRange',costRange); }catch(err){} renderCard(); };
+  }
+  for(const row of c.querySelectorAll('.s-item[data-id]')){
+    row.onclick=e=>{e.stopPropagation();focusSession(row.dataset.id);};
+    row.onkeydown=e=>{ if(e.key==='Enter'||e.key===' '){e.preventDefault();focusSession(row.dataset.id);} };
   }
   const signIn=c.querySelector('#claude-sign-in');
   if(signIn) signIn.onclick=e=>{e.stopPropagation();signInClaude();};
