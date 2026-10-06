@@ -29,7 +29,7 @@
 //! Credentials are borrowed, never managed: the numbers come from Codex's own sign-in and Codex's
 //! own endpoint. No sign-in and no session history at all means absent (no cell is shown).
 
-use crate::usage::{DailyTokens, LimitWindow, TokenUsage, UsageSnapshot};
+use crate::usage::{DailyTokens, LimitWindow, ResetCredit, ResetCredits, TokenUsage, UsageSnapshot};
 use crate::AppState;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -42,6 +42,8 @@ const CURRENT_FOR_MS: u64 = 5 * 60 * 1000;
 const ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
 /// The profile page's token statistics (upstream `fetchProfileUsage`)
 const PROFILE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/profiles/me";
+/// Unused rate-limit resets on the account (upstream `fetchResetCredits`)
+const RESETS_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits";
 const BACKOFF_MIN_SECS: u64 = 60; // wait at least this long after a 429; Retry-After only raises it
 
 static REFRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -49,6 +51,9 @@ static REFRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::n
 static BACKOFF_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// The last token statistics the profile answered with, kept through a failed read
 static LAST_PROFILE: std::sync::Mutex<Option<TokenUsage>> = std::sync::Mutex::new(None);
+/// The last unused-resets list the backend answered with, kept through a failed read; the card
+/// takes off whatever has expired since, so an old list never shows a reset that is gone
+static LAST_RESETS: std::sync::Mutex<Option<ResetCredits>> = std::sync::Mutex::new(None);
 /// When the native client may be tried again after it came back with nothing.
 ///
 /// `read_app_server` spawns `codex app-server` and waits on it. On a machine that has Codex
@@ -265,6 +270,61 @@ fn fetch_profile(cred: &Credential) -> Option<TokenUsage> {
             None
         }
     }
+}
+
+/// Unused resets, same sign-in plus the `OpenAI-Beta: codex-1` header upstream sends. Any failure
+/// is "not known" (None), never "none left"
+fn fetch_resets(cred: &Credential) -> Option<ResetCredits> {
+    let resp = ureq::get(RESETS_ENDPOINT)
+        .set("Authorization", &format!("Bearer {}", cred.access_token))
+        .set("ChatGPT-Account-Id", &cred.account_id)
+        .set("Accept", "application/json")
+        .set("Cache-Control", "no-cache, no-store")
+        .set("OpenAI-Beta", "codex-1")
+        .set("User-Agent", concat!("codenotch/", env!("CARGO_PKG_VERSION"), " (Windows)"))
+        .timeout(Duration::from_secs(15))
+        .call();
+    match resp {
+        Ok(r) => r.into_json::<serde_json::Value>().ok().map(|v| parse_resets(&v)),
+        Err(ureq::Error::Status(code, _)) => {
+            crate::applog(&format!("codex: unused resets HTTP {code}"));
+            None
+        }
+        Err(e) => {
+            crate::applog(&format!("codex: unused resets failed ({e})"));
+            None
+        }
+    }
+}
+
+/// `{"available_count":2,"credits":[{"id","status","expires_at"}]}`, upstream `resetCredits(from:)`.
+/// The reported count is trusted even when the list is truncated, and counts the available ones
+/// only when it is missing. Any other JSON is an answer with nothing in it: zero
+fn parse_resets(v: &serde_json::Value) -> ResetCredits {
+    let credits: Vec<ResetCredit> = v
+        .get("credits")
+        .and_then(|x| x.as_array())
+        .map(|list| {
+            list.iter()
+                .filter(|c| c.is_object())
+                .map(|c| ResetCredit {
+                    id: c.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                    status: c.get("status").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                    expires_at: c
+                        .get("expires_at")
+                        .and_then(|x| x.as_str())
+                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+                        .map(|d| d.timestamp_millis().max(0) as u64),
+                    count: 1,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    let available_count = v
+        .get("available_count")
+        .and_then(|x| x.as_u64())
+        .unwrap_or_else(|| credits.iter().filter(|c| c.status == "available").count() as u64);
+    ResetCredits { available_count, credits }
 }
 
 /// `{"stats":{"lifetime_tokens","peak_daily_tokens","longest_running_turn_sec",
@@ -753,6 +813,11 @@ fn read_once() -> UsageSnapshot {
                             *last = Some(fresh);
                         }
                         snap.token_usage = last.clone();
+                        let mut resets = LAST_RESETS.lock().unwrap();
+                        if let Some(fresh) = fetch_resets(&cred) {
+                            *resets = Some(fresh);
+                        }
+                        snap.reset_credits = resets.clone();
                         return snap;
                     }
                     let keys: Vec<String> = v.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
@@ -1268,5 +1333,21 @@ mod tests {
         assert_eq!(partial.lifetime_tokens, Some(7));
         assert_eq!(partial.peak_daily_tokens, None, "missing is a dash, not zero");
         assert!(partial.daily.is_empty());
+    }
+
+    #[test]
+    fn unused_resets_trust_the_reported_count() {
+        let v = serde_json::json!({"available_count": 3, "credits": [
+            {"id": "a", "status": "available", "expires_at": "2026-10-20T10:00:00.123Z"},
+            {"id": "b", "status": "used", "expires_at": "2026-10-10T10:00:00Z"},
+            "garbage"
+        ]});
+        let r = parse_resets(&v);
+        assert_eq!(r.available_count, 3, "the list can be truncated; the total is the total");
+        assert_eq!(r.credits.len(), 2);
+        assert!(r.credits[0].expires_at.is_some(), "fractional seconds parse");
+        let counted = parse_resets(&serde_json::json!({"credits": [{"status": "available"}, {"status": "used"}]}));
+        assert_eq!(counted.available_count, 1, "without a total, the available ones are counted");
+        assert_eq!(parse_resets(&serde_json::json!({"detail": "x"})).available_count, 0);
     }
 }

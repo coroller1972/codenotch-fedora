@@ -143,6 +143,7 @@
   /* Codex's token statistics, as the Mac's CodexUsageSection: figures, a rule, today and 30 days, then the bars */
   .t-rule{height:1px;background:var(--card-line);margin:12px 0 8px}
   .t-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:1.7}
+  .t-head{font-size:12px;font-weight:600;color:var(--ink-2);margin-bottom:2px}
   .t-row .t-value{color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
   .t-chart{display:flex;align-items:flex-end;gap:2px;height:44px;margin-top:8px;border-bottom:1px solid var(--card-line)}
   .t-chart>div{flex:1;min-width:0;background:var(--ink-dim);border-radius:2px 2px 0 0}
@@ -480,6 +481,32 @@ function todayTokens(daily,now){
   return b?b.tokens:null;
 }
 // END TESTABLE TOKENS SELECTOR
+// Unused resets as the Mac's UsageResetCredits.unexpired(at:): the provider's own total, less
+// whatever has expired since it answered; nothing at all when none is left
+// BEGIN TESTABLE RESETS SELECTOR
+function availableResets(rc,now){
+  if(!rc) return null;
+  const available=(rc.credits||[]).filter(c=>c.status==='available');
+  const expired=available.filter(c=>c.expires_at!=null&&c.expires_at<=now);
+  const count=Math.max(0,(rc.available_count||0)-expired.reduce((a,c)=>a+(c.count||1),0));
+  if(count<=0) return null;
+  const left=available.map(c=>c.expires_at).filter(t=>t!=null&&t>now);
+  return {count,next:left.length?Math.min(...left):null};
+}
+// END TESTABLE RESETS SELECTOR
+function resetsHtml(rc){
+  const now=Date.now(), r=availableResets(rc,now); if(!r) return '';
+  let html=`<div class="t-rule"></div><div class="t-head">${esc(ui().unusedTitle)}</div><div class="t-row"><span>${esc(ui().unused(r.count))}</span></div>`;
+  if(r.next){
+    const d=new Date(r.next), locale=ui().locale;
+    // A date a week or more out, otherwise the weekday and time, as the Mac stamps it
+    const stamp=daysApart(now,r.next)>=7
+      ?d.toLocaleDateString(locale,{month:'short',day:'numeric'})
+      :d.toLocaleDateString(locale,{weekday:'short'})+' '+d.toLocaleTimeString(locale,{hour:'numeric',minute:'2-digit',hourCycle:stateSnap.clock_24h?'h23':'h12'});
+    html+=`<div class="t-row"><span class="t-value">${esc(ui().expires(stamp,r.count>1))}</span></div>`;
+  }
+  return html;
+}
 function tokenUsageHtml(u){
   const now=Date.now(), days=last30Days(u.daily,now);
   const max=Math.max(1,...days.map(d=>d.tokens));
@@ -1119,37 +1146,44 @@ const PATTERNS={
 // Grammar differs enough that a format string would not carry it — Russian puts the verb last,
 // Chinese puts it after the time — so each language writes its own short functions.
 const UI={
-  ko:{pace:(v,d)=>d?`${v}% 초과`:`${v}% 여유`,usedOnly:p=>`${p}% 사용`,
+  ko:{unusedTitle:'미사용 리셋',unused:n=>n===1?'미사용 리셋 1개':`미사용 리셋 ${n}개`,expires:(d,next)=>next?`다음 만료 ${d}`:`${d}에 만료`,
+      pace:(v,d)=>d?`${v}% 초과`:`${v}% 여유`,usedOnly:p=>`${p}% 사용`,
       locale:'ko-KR',title:n=>n+' 사용량',resetting:'재설정 중…',resetsIn:m=>`${m}분 후 재설정`,
       resetsAt:t=>`${t}에 재설정`,resetsOn:(d,t)=>`${d} ${t}에 재설정`,resetsDate:d=>`${d}에 재설정`,
       ago:m=>m<60?`${m}분 전`:`${Math.round(m/60)}시간 전`,
       usedLeft:(used,left)=>`${used}% 사용 · ${left}% 남음`,andMore:n=>`외 ${n}개`,updated:a=>`${a}에 마지막 업데이트됨`},
-  'pt-BR':{pace:(v,d)=>d?`${v}% de déficit`:`${v}% em reserva`,usedOnly:p=>`${p}% usado`,updated:a=>`Atualizado ${a}`,
+  'pt-BR':{unusedTitle:'Reinicializações não usadas',unused:n=>n===1?'1 reinicialização não usada':`${n} reinicializações não usadas`,expires:(d,next)=>next?`A próxima expira ${d}`:`Expira ${d}`,
+      pace:(v,d)=>d?`${v}% de déficit`:`${v}% em reserva`,usedOnly:p=>`${p}% usado`,updated:a=>`Atualizado ${a}`,
       locale:'pt-BR',title:n=>'Uso do '+n,resetting:'Renovando…',resetsIn:m=>`Renova em ${m} min`,
       resetsAt:t=>`Renova às ${t}`,resetsOn:(d,t)=>`Renova ${d} às ${t}`,resetsDate:d=>`Renova ${d}`,
       ago:m=>m<60?`há ${m} min`:`há ${Math.round(m/60)} h`,
       usedLeft:(used,left)=>`${used}% usado · ${left}% restante`,andMore:n=>`e mais ${n}`},
-  en:{pace:(v,d)=>d?`${v}% deficit`:`${v}% reserved`,usedOnly:p=>`${p}% used`,
+  en:{unusedTitle:'Unused resets',unused:n=>n===1?'1 unused reset':`${n} unused resets`,expires:(d,next)=>next?`Next expires ${d}`:`Expires ${d}`,
+      pace:(v,d)=>d?`${v}% deficit`:`${v}% reserved`,usedOnly:p=>`${p}% used`,
       locale:'en-US',title:n=>n+' Usage',resetting:'Resetting…',resetsIn:m=>`Resets in ${m} min`,
       resetsAt:t=>`Resets at ${t}`,resetsOn:(d,t)=>`Resets ${d} ${t}`,resetsDate:d=>`Resets ${d}`,
       ago:m=>m<60?`${m}m ago`:`${Math.round(m/60)}h ago`,
       usedLeft:(used,left)=>`${used}% Used · ${left}% left`,andMore:n=>`and ${n} more`,updated:a=>`Updated ${a}`},
-  uk:{pace:(v,d)=>d?`${v}% дефіциту`:`${v}% запасу`,usedOnly:p=>`Використано ${p}%`,
+  uk:{unusedTitle:'Невикористані скидання',unused:n=>n===1?'1 невикористане скидання':`${n} невикористаних скидань`,expires:(d,next)=>next?`Наступне спливає ${d}`:`Спливає ${d}`,
+      pace:(v,d)=>d?`${v}% дефіциту`:`${v}% запасу`,usedOnly:p=>`Використано ${p}%`,
       locale:'uk-UA',title:n=>'Використання '+n,resetting:'Скидання…',resetsIn:m=>`Скидання через ${m} хв`,
       resetsAt:t=>`Скидання о ${t}`,resetsOn:(d,t)=>`Скидання: ${d} ${t}`,resetsDate:d=>`Скидання: ${d}`,
       ago:m=>m<60?`${m} хв тому`:`${Math.round(m/60)} год тому`,
       usedLeft:(used,left)=>`Використано ${used}% · лишилось ${left}%`,andMore:n=>`і ще ${n}`,updated:a=>`Оновлено ${a}`},
-  ru:{pace:(v,d)=>d?`дефицит ${v}%`:`резерв ${v}%`,usedOnly:p=>`Использовано ${p}%`,
+  ru:{unusedTitle:'Неиспользованные сбросы',unused:n=>n===1?'1 неиспользованный сброс':`${n} неиспользованных сбросов`,expires:(d,next)=>next?`Следующий истекает ${d}`:`Истекает ${d}`,
+      pace:(v,d)=>d?`дефицит ${v}%`:`резерв ${v}%`,usedOnly:p=>`Использовано ${p}%`,
       locale:'ru-RU',title:n=>'Использование '+n,resetting:'Сброс…',resetsIn:m=>`Сброс через ${m} мин`,
       resetsAt:t=>`Сброс в ${t}`,resetsOn:(d,t)=>`Сброс: ${d} ${t}`,resetsDate:d=>`Сброс: ${d}`,
       ago:m=>m<60?`${m} мин назад`:`${Math.round(m/60)} ч назад`,
       usedLeft:(used,left)=>`Использовано ${used}% · осталось ${left}%`,andMore:n=>`и ещё ${n}`,updated:a=>`Обновлено ${a}`},
-  zh:{pace:(v,d)=>d?`${v}% 透支`:`${v}% 预留`,usedOnly:p=>`已用 ${p}%`,
+  zh:{unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
+      pace:(v,d)=>d?`${v}% 透支`:`${v}% 预留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-CN',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分钟后重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分钟前`:`${Math.round(m/60)} 小时前`,
       usedLeft:(used,left)=>`已用 ${used}% · 剩余 ${left}%`,andMore:n=>`另有 ${n} 个`,updated:a=>`更新于 ${a}`},
-  'zh-Hant':{pace:(v,d)=>d?`${v}% 透支`:`${v}% 預留`,usedOnly:p=>`已用 ${p}%`,
+  'zh-Hant':{unusedTitle:'未使用重置',unused:n=>`${n} 次未使用重置`,expires:(d,next)=>next?`下次 ${d} 到期`:`${d} 到期`,
+      pace:(v,d)=>d?`${v}% 透支`:`${v}% 預留`,usedOnly:p=>`已用 ${p}%`,
       locale:'zh-TW',title:n=>n+' 用量',resetting:'正在重置…',resetsIn:m=>`${m} 分鐘後重置`,
       resetsAt:t=>`${t} 重置`,resetsOn:(d,t)=>`${d} ${t} 重置`,resetsDate:d=>`${d} 重置`,
       ago:m=>m<60?`${m} 分鐘前`:`${Math.round(m/60)} 小時前`,
@@ -1475,6 +1509,7 @@ function renderCard(){
     }
     if(group) html+=`</div>`;
     if(snap.note) html+=`<div class="c-note">${esc(textCopy(snap.note))}</div>`;
+    if(snap.reset_credits) html+=resetsHtml(snap.reset_credits);
     if(snap.token_usage) html+=tokenUsageHtml(snap.token_usage);
   }
   if(offersClaudeSignIn(p)) html+=claudeAuthHtml(claudeAuth,claudeActionMessage);
