@@ -29,7 +29,7 @@
 //! Credentials are borrowed, never managed: the numbers come from Codex's own sign-in and Codex's
 //! own endpoint. No sign-in and no session history at all means absent (no cell is shown).
 
-use crate::usage::{LimitWindow, UsageSnapshot};
+use crate::usage::{DailyTokens, LimitWindow, TokenUsage, UsageSnapshot};
 use crate::AppState;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -40,11 +40,15 @@ const POLL_SECS: u64 = 300; // Preserve the upstream cadence; a tray refresh int
 const TAIL_BYTES: u64 = 256 * 1024;
 const CURRENT_FOR_MS: u64 = 5 * 60 * 1000;
 const ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/usage";
+/// The profile page's token statistics (upstream `fetchProfileUsage`)
+const PROFILE_ENDPOINT: &str = "https://chatgpt.com/backend-api/wham/profiles/me";
 const BACKOFF_MIN_SECS: u64 = 60; // wait at least this long after a 429; Retry-After only raises it
 
 static REFRESH: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Retry deadline given by the server (ms epoch): neither a manual refresh nor a restart may bypass it
 static BACKOFF_UNTIL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// The last token statistics the profile answered with, kept through a failed read
+static LAST_PROFILE: std::sync::Mutex<Option<TokenUsage>> = std::sync::Mutex::new(None);
 /// When the native client may be tried again after it came back with nothing.
 ///
 /// `read_app_server` spawns `codex app-server` and waits on it. On a machine that has Codex
@@ -232,13 +236,71 @@ fn fetch_usage(cred: &Credential) -> Result<serde_json::Value, LiveErr> {
     }
 }
 
-/// Upstream's label rule: Codex names windows only by length, and "5h limit" says more than "primary"
 /// A window's length in whole seconds, from whatever unit the source states it in; nothing for a
 /// missing or nonsensical one, so the card shows no pace rather than one against a made-up length
 fn secs(value: Option<f64>, per_unit: f64) -> Option<u64> {
     value.map(|v| v * per_unit).filter(|s| s.is_finite() && *s > 0.0).map(|s| s.round() as u64)
 }
 
+/// The profile page's token statistics: the same sign-in and headers as the usage read. Upstream
+/// asks for them on every poll after usage answered, and treats any failure as "no statistics"
+/// rather than a failed reading, so this returns None instead of an error
+fn fetch_profile(cred: &Credential) -> Option<TokenUsage> {
+    let resp = ureq::get(PROFILE_ENDPOINT)
+        .set("Authorization", &format!("Bearer {}", cred.access_token))
+        .set("ChatGPT-Account-Id", &cred.account_id)
+        .set("Accept", "application/json")
+        .set("Cache-Control", "no-cache, no-store")
+        .set("User-Agent", concat!("codenotch/", env!("CARGO_PKG_VERSION"), " (Windows)"))
+        .timeout(Duration::from_secs(15))
+        .call();
+    match resp {
+        Ok(r) => r.into_json::<serde_json::Value>().ok().and_then(|v| parse_profile(&v)),
+        Err(ureq::Error::Status(code, _)) => {
+            crate::applog(&format!("codex: profile statistics HTTP {code}"));
+            None
+        }
+        Err(e) => {
+            crate::applog(&format!("codex: profile statistics failed ({e})"));
+            None
+        }
+    }
+}
+
+/// `{"stats":{"lifetime_tokens","peak_daily_tokens","longest_running_turn_sec",
+/// "current_streak_days","longest_streak_days","daily_usage_buckets":[{"start_date","tokens"}]}}`.
+/// None when there is no `stats` object at all: a section of dashes would say nothing. A bucket
+/// that cannot be read is skipped on its own rather than costing the others
+fn parse_profile(v: &serde_json::Value) -> Option<TokenUsage> {
+    let stats = v.get("stats").filter(|x| x.is_object())?;
+    let count = |key: &str| stats.get(key).and_then(|x| x.as_f64()).filter(|n| n.is_finite() && *n >= 0.0).map(|n| n.round() as u64);
+    let daily = stats
+        .get("daily_usage_buckets")
+        .and_then(|x| x.as_array())
+        .map(|buckets| {
+            buckets
+                .iter()
+                .filter_map(|b| {
+                    let date = b.get("start_date")?.as_str()?;
+                    // Only the calendar day: upstream keys buckets by "yyyy-MM-dd"
+                    let date = date.get(..10).filter(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").is_ok())?;
+                    let tokens = b.get("tokens")?.as_f64().filter(|n| n.is_finite() && *n >= 0.0)?;
+                    Some(DailyTokens { date: date.to_string(), tokens: tokens.round() as u64 })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Some(TokenUsage {
+        lifetime_tokens: count("lifetime_tokens"),
+        peak_daily_tokens: count("peak_daily_tokens"),
+        longest_turn_secs: stats.get("longest_running_turn_sec").and_then(|x| x.as_f64()).filter(|n| n.is_finite() && *n >= 0.0),
+        current_streak_days: count("current_streak_days"),
+        longest_streak_days: count("longest_streak_days"),
+        daily,
+    })
+}
+
+/// Upstream's label rule: Codex names windows only by length, and "5h limit" says more than "primary"
 fn label_for(window_minutes: Option<f64>, id: &str) -> String {
     match window_minutes {
         Some(m) if m > 0.0 => {
@@ -678,12 +740,19 @@ fn read_once() -> UsageSnapshot {
                 Ok(v) => {
                     let windows = windows_from_usage(&v);
                     if !windows.is_empty() {
-                        let plan = v.get("plan_type").and_then(|x| x.as_str()).map(String::from).or(cred.plan);
+                        let plan = v.get("plan_type").and_then(|x| x.as_str()).map(String::from).or(cred.plan.clone());
                         snap.status = "ok".into();
                         snap.windows = windows;
                         snap.fetched_at = now_ms();
                         // The plan goes under the card's title, as on the Mac; a live reading needs no note
                         snap.plan = crate::usage::plan_name(plan.as_deref());
+                        // A statistics read that fails keeps the last one: they move by the day,
+                        // and the chart blinking out for a poll would read as the history vanishing
+                        let mut last = LAST_PROFILE.lock().unwrap();
+                        if let Some(fresh) = fetch_profile(&cred) {
+                            *last = Some(fresh);
+                        }
+                        snap.token_usage = last.clone();
                         return snap;
                     }
                     let keys: Vec<String> = v.as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default();
@@ -1169,5 +1238,35 @@ mod tests {
         assert_eq!(ids(&ws), ["primary"]);
         assert_eq!(ws[0].label, "Monthly limit");
         assert!((ws[0].used - 0.16).abs() < 1e-4);
+    }
+
+    #[test]
+    fn profile_statistics_are_read_as_published() {
+        let v: serde_json::Value = serde_json::from_str(r#"{"stats":{
+            "lifetime_tokens":123456789,"peak_daily_tokens":4500000,"longest_running_turn_sec":2712.5,
+            "current_streak_days":3,"longest_streak_days":12,
+            "daily_usage_buckets":[
+                {"start_date":"2026-10-05","tokens":1200000},
+                {"start_date":"2026-10-06T00:00:00Z","tokens":0},
+                {"start_date":"yesterday","tokens":5},
+                {"start_date":"2026-10-04"}
+            ]}}"#).unwrap();
+        let u = parse_profile(&v).unwrap();
+        assert_eq!(u.lifetime_tokens, Some(123_456_789));
+        assert_eq!(u.peak_daily_tokens, Some(4_500_000));
+        assert_eq!(u.longest_turn_secs, Some(2712.5));
+        assert_eq!((u.current_streak_days, u.longest_streak_days), (Some(3), Some(12)));
+        let days: Vec<(&str, u64)> = u.daily.iter().map(|d| (d.date.as_str(), d.tokens)).collect();
+        assert_eq!(days, [("2026-10-05", 1_200_000), ("2026-10-06", 0)], "a present zero stays, unreadable buckets go");
+    }
+
+    #[test]
+    fn a_profile_without_statistics_shows_nothing() {
+        assert_eq!(parse_profile(&serde_json::json!({"user": {}})), None);
+        assert_eq!(parse_profile(&serde_json::json!({"stats": null})), None);
+        let partial = parse_profile(&serde_json::json!({"stats": {"lifetime_tokens": 7}})).unwrap();
+        assert_eq!(partial.lifetime_tokens, Some(7));
+        assert_eq!(partial.peak_daily_tokens, None, "missing is a dash, not zero");
+        assert!(partial.daily.is_empty());
     }
 }

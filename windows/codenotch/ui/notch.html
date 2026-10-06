@@ -140,6 +140,12 @@
   .m-stats>div{flex:1;min-width:0}
   .m-stats .m-label{color:var(--ink-dim)}
   .m-stats .m-value{font-variant-numeric:tabular-nums;white-space:nowrap}
+  /* Codex's token statistics, as the Mac's CodexUsageSection: figures, a rule, today and 30 days, then the bars */
+  .t-rule{height:1px;background:var(--card-line);margin:12px 0 8px}
+  .t-row{display:flex;justify-content:space-between;gap:12px;font-size:12px;line-height:1.7}
+  .t-row .t-value{color:var(--ink-dim);font-variant-numeric:tabular-nums;white-space:nowrap}
+  .t-chart{display:flex;align-items:flex-end;gap:2px;height:44px;margin-top:8px;border-bottom:1px solid var(--card-line)}
+  .t-chart>div{flex:1;min-width:0;background:var(--ink-dim);border-radius:2px 2px 0 0}
   .g-head{font-size:12px;font-weight:700;color:var(--ink-2);margin-top:12px}
   .g-box{border:1px solid var(--card-line);border-radius:10px;padding:0 10px 8px;margin-top:6px}
   .c-note{font-size:12px;color:var(--ink-3);line-height:1.5;margin-top:6px}
@@ -437,6 +443,56 @@ function moneyHtml(w){
     <div class="m-stats">${stat('Spent',m.spent,tone(w.used))}${stat('Remaining',m.remaining)}${stat('Funded',funded,'var(--ink-2)')}</div>
   </div>`;
 }
+// Codex's token statistics, the Mac's UsageFormat and CodexTokenUsage: figures as 1.2M / 450K,
+// a duration as 1h 5m, and the 30 calendar days ending today with a missing day drawn as nothing
+// BEGIN TESTABLE TOKENS SELECTOR
+function tokensText(v){
+  if(v==null||!isFinite(v)) return '—';
+  if(v>=1e9) return (v/1e9).toFixed(2)+'B';
+  if(v>=1e6) return (v/1e6).toFixed(1)+'M';
+  if(v>=1e3) return (v/1e3).toFixed(0)+'K';
+  return String(Math.round(v));
+}
+function durationText(secs){
+  if(secs==null||!isFinite(secs)||secs<=0) return '—';
+  const minutes=Math.max(1,Math.round(secs/60)), h=Math.floor(minutes/60), m=minutes%60;
+  return h>0?(m===0?`${h}h`:`${h}h ${m}m`):`${minutes}m`;
+}
+function dayKey(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
+function last30Days(daily,now){
+  const byDay=new Map((daily||[]).map(b=>[b.date,b.tokens]));
+  const today=new Date(now); today.setHours(0,0,0,0);
+  const out=[];
+  for(let i=29;i>=0;i--){
+    // By calendar date, not 24-hour steps, so a clock change cannot skip or repeat a day
+    const d=new Date(today.getFullYear(),today.getMonth(),today.getDate()-i);
+    const key=dayKey(d);
+    out.push({date:key,tokens:byDay.get(key)||0});
+  }
+  return out;
+}
+// A missing bucket for today means not published yet; a present zero is a real zero
+function todayTokens(daily,now){
+  const b=(daily||[]).find(x=>x.date===dayKey(new Date(now)));
+  return b?b.tokens:null;
+}
+// END TESTABLE TOKENS SELECTOR
+function tokenUsageHtml(u){
+  const now=Date.now(), days=last30Days(u.daily,now);
+  const max=Math.max(1,...days.map(d=>d.tokens));
+  const row=(label,value)=>`<div class="t-row"><span>${esc(textCopy(label))}</span><span class="t-value">${esc(value)}</span></div>`;
+  const today=todayTokens(u.daily,now);
+  return `<div class="t-rule"></div>`
+    +row('Lifetime tokens',tokensText(u.lifetime_tokens))
+    +row('Peak tokens',tokensText(u.peak_daily_tokens))
+    +row('Longest chat',durationText(u.longest_turn_secs))
+    +row('Current streak',u.current_streak_days==null?'—':u.current_streak_days+'d')
+    +row('Longest streak',u.longest_streak_days==null?'—':u.longest_streak_days+'d')
+    +`<div class="t-rule"></div>`
+    +row('Today',today==null?textCopy('Pending'):tokensText(today))
+    +row('30-day tokens',tokensText(days.reduce((a,d)=>a+d.tokens,0)))
+    +`<div class="t-chart" aria-hidden="true">${days.map(d=>`<div style="height:${(d.tokens/max*100).toFixed(1)}%"></div>`).join('')}</div>`;
+}
 let usage={status:'',windows:[],fetched_at:0,note:''};
 let codexSnap={status:'absent',windows:[],fetched_at:0,note:''};
 let cursorSnap={status:'absent',windows:[],fetched_at:0,note:''};
@@ -489,6 +545,7 @@ let uiLang='en';
 // showing half a translation, so adding one is only ever data.
 const TEXT={
   ko:{
+    'Lifetime tokens':'누적 토큰','Peak tokens':'최대 토큰','Longest chat':'가장 긴 채팅','Current streak':'현재 연속 사용 일수','Longest streak':'최장 연속 사용 일수','Today':'오늘','30-day tokens':'30일 토큰','Pending':'대기 중',
     'Spend limit':'지출 한도','Spent':'사용액','Remaining':'잔여액','Funded':'충전액',
     'Included usage':'포함 사용량',
     'API usage':'API 사용량',
@@ -546,6 +603,7 @@ const TEXT={
     'Completions':'코드 완성',
   },
   'pt-BR':{
+    'Lifetime tokens':'Tokens no total','Peak tokens':'Pico de tokens','Longest chat':'Conversa mais longa','Current streak':'Sequência atual','Longest streak':'Maior sequência','Today':'Hoje','30-day tokens':'Tokens em 30 dias','Pending':'Pendente',
     'Spend limit':'Limite de gastos','Spent':'Gasto','Remaining':'Restante','Funded':'Total',
     'Included usage':'Uso incluído',
     'Sign in':'Entrar',
@@ -606,6 +664,7 @@ const TEXT={
     'Working in':'Em execução em'
   },
   uk:{
+    'Lifetime tokens':'Токенів усього','Peak tokens':'Пік токенів за день','Longest chat':'Найдовший чат','Current streak':'Поточна серія','Longest streak':'Найдовша серія','Today':'Сьогодні','30-day tokens':'Токени за 30 днів','Pending':'Очікується',
     'Spend limit':'Ліміт витрат','Spent':'Витрачено','Remaining':'Залишок','Funded':'Поповнено',
     'Included usage':'Використання в тарифі',
     'API usage':'Використання API',
@@ -645,6 +704,7 @@ const TEXT={
     'Working in':'Працює в'
   },
   ru:{
+    'Lifetime tokens':'Всего токенов','Peak tokens':'Пик токенов за день','Longest chat':'Самый длинный чат','Current streak':'Текущая серия','Longest streak':'Самая длинная серия','Today':'Сегодня','30-day tokens':'Токены за 30 дней','Pending':'Ожидается',
     'Spend limit':'Лимит расходов','Spent':'Потрачено','Remaining':'Осталось','Funded':'Всего',
     'Included usage':'Включённое использование',
     'Sign in':'Авторизоваться',
@@ -699,6 +759,7 @@ const TEXT={
     'Working in':'Работает в'
   },
   zh:{
+    'Lifetime tokens':'累计 token','Peak tokens':'峰值 token','Longest chat':'最长对话','Current streak':'当前连续','Longest streak':'最长连续','Today':'今日','30-day tokens':'30 天 token','Pending':'待出',
     'Spend limit':'支出上限','Spent':'已花费','Remaining':'剩余','Funded':'已充值',
     'Included usage':'包含用量',
     'API usage':'API 用量',
@@ -759,6 +820,7 @@ const TEXT={
     'No OpenCode Go subscription on this account':'此账号没有 OpenCode Go 订阅',
   },
   'zh-Hant':{
+    'Lifetime tokens':'累計 token','Peak tokens':'峰值 token','Longest chat':'最長對話','Current streak':'目前連續','Longest streak':'最長連續','Today':'今日','30-day tokens':'30 天 token','Pending':'待出',
     'Spend limit':'支出上限','Spent':'已花費','Remaining':'剩餘','Funded':'已充值',
     'Included usage':'包含用量',
     'API usage':'API 用量',
@@ -1410,6 +1472,7 @@ function renderCard(){
     }
     if(group) html+=`</div>`;
     if(snap.note) html+=`<div class="c-note">${esc(textCopy(snap.note))}</div>`;
+    if(snap.token_usage) html+=tokenUsageHtml(snap.token_usage);
   }
   if(offersClaudeSignIn(p)) html+=claudeAuthHtml(claudeAuth,claudeActionMessage);
   if(p.base==='claude'){ // live sessions (a full list with jump-to-session is a follow-up)
