@@ -1,6 +1,6 @@
 [package]
 name = "codenotch"
-version = "1.21.0"
+version = "1.21.1"
 edition = "2021"
 description = "Codenotch for Windows and Linux — AI usage and session monitor"
 license = "MIT"
