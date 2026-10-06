@@ -1,5 +1,5 @@
 //! Claude usage adapter (official), implemented from the upstream Codenotch's documented behaviour.
-//! Endpoint: GET https://api.anthropic.com/api/oauth/usage
+//! Endpoint: GET https://api.anthropic.com/api/oauth/usage?cedar_ember=1 (the flag adds the unused-resets block)
 //! Headers: Authorization: Bearer <token>; anthropic-beta: oauth-2025-04-20; 15 s timeout
 //! Rules (upstream's discipline):
 //!   - the credential comes from Claude Code's own store (Windows: ~/.claude/.credentials.json), read only
@@ -27,7 +27,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Emitter, Manager};
 
-const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage";
+/// `cedar_ember=1` opts into the unused-resets block, as upstream asks
+const ENDPOINT: &str = "https://api.anthropic.com/api/oauth/usage?cedar_ember=1";
 const POLL_ACTIVE_SECS: u64 = 60;
 const POLL_IDLE_SECS: u64 = 300;
 const BACKOFF_BASE_SECS: u64 = 60;
@@ -180,6 +181,74 @@ pub struct UsageSnapshot {
     /// the card lists them and draws the last 30 days as bars. None = nothing to show
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub token_usage: Option<TokenUsage>,
+    /// Unused rate-limit resets on the account (upstream `UsageResetCredits`). None = the
+    /// provider did not say, which is not the same as zero
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reset_credits: Option<ResetCredits>,
+}
+
+/// Unused resets as the provider listed them. `available_count` is the provider's own total and
+/// is trusted over the list, which Codex can truncate; the card takes expired ones off at render
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ResetCredits {
+    pub available_count: u64,
+    #[serde(default)]
+    pub credits: Vec<ResetCredit>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ResetCredit {
+    #[serde(default)]
+    pub id: String,
+    /// "available" is the only status that counts
+    #[serde(default)]
+    pub status: String,
+    /// ms epoch; None = does not expire as far as anyone said
+    #[serde(default)]
+    pub expires_at: Option<u64>,
+    /// How many resets this one entry stands for (a Claude grant can hold several)
+    #[serde(default = "one")]
+    pub count: u64,
+}
+
+fn one() -> u64 {
+    1
+}
+
+/// Claude's `cedar_ember` block → unused resets, upstream `ClaudeResetCredits.credits(at:)`.
+/// `{eligible, ineligible_reason, grants:[{id, resets_left, starts_at, ends_at, paused}]}`.
+/// OAuth is refused this surface even for an eligible account (`ineligible_reason: "surface"`):
+/// that is unknown, not "none left", so it is None. A grant that cannot be read is skipped
+fn claude_reset_credits(v: &serde_json::Value, now: u64) -> Option<ResetCredits> {
+    let block = v.get("cedar_ember").filter(|x| x.is_object())?;
+    let eligible = block.get("eligible").and_then(|x| x.as_bool())?;
+    if !eligible && block.get("ineligible_reason").and_then(|x| x.as_str()) == Some("surface") {
+        return None;
+    }
+    let grants = block.get("grants").and_then(|x| x.as_array())?;
+    let mut credits = Vec::new();
+    if eligible {
+        for g in grants {
+            let (Some(left), Some(starts), Some(ends)) = (
+                g.get("resets_left").and_then(|x| x.as_u64()),
+                g.get("starts_at").and_then(parse_reset),
+                g.get("ends_at").and_then(parse_reset),
+            ) else {
+                continue;
+            };
+            let paused = g.get("paused").and_then(|x| x.as_bool()).unwrap_or(false);
+            if left > 0 && !paused && starts <= now && ends > now {
+                credits.push(ResetCredit {
+                    id: g.get("id").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                    status: "available".into(),
+                    expires_at: Some(ends),
+                    count: left,
+                });
+            }
+        }
+    }
+    let available_count = credits.iter().try_fold(0u64, |a, c| a.checked_add(c.count))?;
+    Some(ResetCredits { available_count, credits })
 }
 
 /// Lifetime figures and per-day tokens, exactly as the provider published them. Each figure
@@ -609,7 +678,13 @@ enum FetchErr {
     Other(String),
 }
 
-fn fetch_once(token: &str) -> Result<Vec<LimitWindow>, FetchErr> {
+/// What one read of the endpoint yields
+struct Reading {
+    windows: Vec<LimitWindow>,
+    resets: Option<ResetCredits>,
+}
+
+fn fetch_once(token: &str) -> Result<Reading, FetchErr> {
     let resp = ureq::get(ENDPOINT)
         .set("Authorization", &format!("Bearer {token}"))
         .set("anthropic-beta", "oauth-2025-04-20")
@@ -620,7 +695,7 @@ fn fetch_once(token: &str) -> Result<Vec<LimitWindow>, FetchErr> {
             let v: serde_json::Value = r
                 .into_json()
                 .map_err(|e| FetchErr::Other(format!("parse: {e}")))?;
-            Ok(parse_response(&v))
+            Ok(Reading { windows: parse_response(&v), resets: claude_reset_credits(&v, now_ms()) })
         }
         Err(ureq::Error::Status(401, _)) => Err(FetchErr::NeedsAuth),
         Err(ureq::Error::Status(403, _)) => Err(FetchErr::Other(
@@ -668,6 +743,8 @@ struct Account {
     fetched_at: u64,
     /// subscriptionType from the credential, as last read
     plan: Option<String>,
+    /// Unused resets from the last good read
+    resets: Option<ResetCredits>,
 }
 
 fn key(p: &Profile) -> String {
@@ -703,6 +780,25 @@ fn split_persisted(snap: &UsageSnapshot, order: &[Profile]) -> HashMap<String, V
         }
     }
     out
+}
+
+/// Each account as it was saved: its windows, and with them the status and time of the reading
+/// they came from. Windows alone left the status empty until the first answer, so a restart that
+/// met a 429 first read as signed out ("Sign in to Claude Code…") over a perfectly good reading,
+/// and with no time the card could not say how old it was. One account also gets its unused
+/// resets back; several share one saved status and time, which is the best any of them had.
+fn restore(persisted: &UsageSnapshot, order: &[Profile]) -> HashMap<String, Account> {
+    let mut accounts: HashMap<String, Account> = HashMap::new();
+    for (k, windows) in split_persisted(persisted, order) {
+        let acc = accounts.entry(k).or_default();
+        acc.windows = windows;
+        acc.status = persisted.status.clone();
+        acc.fetched_at = persisted.fetched_at;
+        if order.len() == 1 {
+            acc.resets = persisted.reset_credits.clone();
+        }
+    }
+    accounts
 }
 
 /// One reading out of every account's, in profile order. The status is the best news any account has:
@@ -743,7 +839,9 @@ fn aggregate(order: &[Profile], accounts: &HashMap<String, Account>) -> UsageSna
     // One account names its plan under the card's title, as on the Mac. Several already carry
     // theirs in each cell's heading (`Profile::group`), so a shared subtitle would only repeat one
     if !multi {
-        snap.plan = order.first().and_then(|p| accounts.get(&key(p))).and_then(|a| plan_name(a.plan.as_deref()));
+        let first = order.first().and_then(|p| accounts.get(&key(p)));
+        snap.plan = first.and_then(|a| plan_name(a.plan.as_deref()));
+        snap.reset_credits = first.and_then(|a| a.resets.clone());
     }
     snap
 }
@@ -785,11 +883,12 @@ fn poll_account(p: &Profile, acc: &mut Account, group: Option<&str>) {
                 other => other,
             };
             match result {
-                Ok(windows) => {
+                Ok(reading) => {
                     crate::claude_auth::usage_succeeded();
                     acc.consecutive_429 = 0;
                     acc.status = "ok".into();
-                    acc.windows = decorate(windows, p, group);
+                    acc.windows = decorate(reading.windows, p, group);
+                    acc.resets = reading.resets;
                     acc.fetched_at = now_ms();
                     acc.note.clear();
                     acc.backoff_until = 0;
@@ -808,6 +907,11 @@ fn poll_account(p: &Profile, acc: &mut Account, group: Option<&str>) {
                     // status until `staleAfter`), and the note says why it is not moving.
                     acc.note = format!("Rate limited, retrying in {wait}s");
                     acc.backoff_until = now_ms() + wait * 1000;
+                    // Nothing read yet and nothing saved: still not "signed out", which is what an
+                    // empty status becomes
+                    if acc.status.is_empty() {
+                        acc.status = "error".into();
+                    }
                 }
                 Err(FetchErr::Other(msg)) => {
                     // No reading at all is an error worth showing; a reading we could not refresh is
@@ -831,10 +935,7 @@ pub fn start(app: AppHandle) {
             let _ = app.emit("usage", &snap);
             snap
         };
-        let mut accounts: HashMap<String, Account> = HashMap::new();
-        for (k, windows) in split_persisted(&persisted, &profiles()) {
-            accounts.entry(k).or_default().windows = windows;
-        }
+        let mut accounts = restore(&persisted, &profiles());
         loop {
             // A sign-in the user started owns the credential until it finishes. Polling through it
             // reads a file being rewritten and reports a signed-out account mid-login.
@@ -1112,5 +1213,61 @@ mod tests {
         assert!(parse_response(&zero_limit).is_empty(), "0 of 0 would be an invention");
         let malformed = serde_json::json!({"spend": "on"});
         assert!(parse_response(&malformed).is_empty());
+    }
+
+    fn ember(eligible: bool, reason: Option<&str>, grants: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"cedar_ember": {"eligible": eligible, "ineligible_reason": reason, "grants": grants}})
+    }
+
+    #[test]
+    fn claude_resets_count_only_live_grants() {
+        let now = 1_791_300_000_000; // 2026-10-06
+        let v = ember(true, None, serde_json::json!([
+            {"id": "a", "resets_left": 2, "starts_at": "2026-10-01T00:00:00Z", "ends_at": "2026-10-20T00:00:00Z", "paused": false},
+            {"id": "paused", "resets_left": 5, "starts_at": "2026-10-01T00:00:00Z", "ends_at": "2026-10-20T00:00:00Z", "paused": true},
+            {"id": "ended", "resets_left": 1, "starts_at": "2026-09-01T00:00:00Z", "ends_at": "2026-10-01T00:00:00Z", "paused": false},
+            {"id": "used", "resets_left": 0, "starts_at": "2026-10-01T00:00:00Z", "ends_at": "2026-10-20T00:00:00Z", "paused": false},
+            {"id": "broken"}
+        ]));
+        let r = claude_reset_credits(&v, now).unwrap();
+        assert_eq!(r.available_count, 2);
+        assert_eq!(r.credits.len(), 1);
+        assert_eq!(r.credits[0].count, 2);
+        assert_eq!(r.credits[0].expires_at, parse_reset(&serde_json::json!("2026-10-20T00:00:00Z")));
+    }
+
+    #[test]
+    fn a_refused_surface_is_unknown_not_none_left() {
+        let now = 1_791_300_000_000;
+        assert_eq!(claude_reset_credits(&ember(false, Some("surface"), serde_json::json!([])), now), None);
+        assert_eq!(claude_reset_credits(&serde_json::json!({"cedar_ember": null}), now), None);
+        assert_eq!(claude_reset_credits(&serde_json::json!({}), now), None);
+        let other = claude_reset_credits(&ember(false, Some("plan"), serde_json::json!([])), now).unwrap();
+        assert_eq!(other.available_count, 0, "ineligible for any other reason is a real none");
+    }
+
+    #[test]
+    fn a_restart_keeps_the_saved_reading_whole() {
+        let order = vec![prof(None)];
+        let saved = UsageSnapshot {
+            status: "ok".into(),
+            windows: vec![win("session")],
+            fetched_at: 1234,
+            reset_credits: Some(ResetCredits { available_count: 1, credits: vec![] }),
+            ..Default::default()
+        };
+        let accounts = restore(&saved, &order);
+        let snap = aggregate(&order, &accounts);
+        assert_eq!(snap.status, "ok", "not needsAuth before the first answer");
+        assert_eq!(snap.fetched_at, 1234, "the card can still say how old it is");
+        assert_eq!(snap.reset_credits.map(|r| r.available_count), Some(1));
+    }
+
+    #[test]
+    fn nothing_saved_is_still_nothing() {
+        let order = vec![prof(None)];
+        let accounts = restore(&UsageSnapshot::default(), &order);
+        assert!(accounts.is_empty());
+        assert_eq!(aggregate(&order, &accounts).status, "needsAuth");
     }
 }
